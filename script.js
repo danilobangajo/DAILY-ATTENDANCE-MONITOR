@@ -1449,32 +1449,25 @@ function confirmDelete(empId) {
 }
 
 // Delete employee
-function deleteEmployee() {
+async function deleteEmployee() {
     const empId = document.getElementById('deleteEmployeeId').value;
     let employees = JSON.parse(storage.getItem('employees') || '[]');
     
-    // Get employee name and department before deleting
     const employee = employees.find(e => e.id == empId);
     const employeeName = employee ? employee.name : null;
     const employeeDept = employee ? employee.department : null;
     
-    // Delete employee from employees list
     employees = employees.filter(e => e.id != empId);
     storage.setItem('employees', JSON.stringify(employees));
     
-    // Delete all attendance records for this employee in this department
     if (employeeName && employeeDept) {
         let attendanceData = loadAttendanceData();
         attendanceData = attendanceData.filter(record => !(record.name === employeeName && record.department === employeeDept));
         saveAttendanceData(attendanceData);
-        
-        // Force complete sync to Google Sheets
-        syncToGoogleSheets('forceSync', { 
-            employeeName: employeeName,
-            action: 'deleteEmployee'
-        });
-        syncToGoogleSheets('deleteEmployee', { employeeName: employeeName });
     }
+
+    // Sync full state first so server reflects the deletion before UI updates
+    await syncFullState();
     
     document.activeElement?.blur();
     const modal = bootstrap.Modal.getInstance(document.getElementById('deleteModal'));
@@ -1482,10 +1475,8 @@ function deleteEmployee() {
     updateDashboard();
     updateDailyReport();
     
-    // Force sync dashboard and weekly report
     syncDashboardToSheets();
     syncWeeklyReportToSheets();
-    syncFullState();
     
     showNotification('Employee and all attendance records deleted successfully!', 'success');
 }

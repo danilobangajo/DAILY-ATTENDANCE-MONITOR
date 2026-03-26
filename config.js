@@ -62,7 +62,8 @@ async function syncFullState() {
     }
 }
 
-// Load data from Google Sheets and merge into local storage (for cross-device sync)
+// Load data from Google Sheets — remote is the single source of truth.
+// Fully replaces local data so deletes/edits on one device reflect on all devices.
 async function loadFromSheets() {
     if (!GOOGLE_SHEETS_WEB_APP_URL || GOOGLE_SHEETS_WEB_APP_URL === 'PASTE_YOUR_WEB_APP_URL_HERE') return false;
     try {
@@ -75,22 +76,10 @@ async function loadFromSheets() {
 
         if (remoteEmployees.length === 0 && remoteAttendance.length === 0) return false;
 
-        // Use storage wrapper (handles tracking prevention fallback)
+        // Remote fully replaces local — no merge, so deletes propagate to all devices
         const store = typeof storage !== 'undefined' ? storage : localStorage;
-        const localEmployees = JSON.parse(store.getItem('employees') || '[]');
-        const localAttendance = JSON.parse(store.getItem('attendanceData') || '[]');
-
-        // Remote is source of truth; keep local-only records not yet on server
-        const remoteEmpIds = new Set(remoteEmployees.map(e => String(e.id)));
-        const localOnlyEmps = localEmployees.filter(e => !remoteEmpIds.has(String(e.id)));
-        const mergedEmployees = [...remoteEmployees, ...localOnlyEmps];
-
-        const remoteAttIds = new Set(remoteAttendance.map(r => String(r.id)));
-        const localOnlyAtt = localAttendance.filter(r => !remoteAttIds.has(String(r.id)));
-        const mergedAttendance = [...remoteAttendance, ...localOnlyAtt];
-
-        store.setItem('employees', JSON.stringify(mergedEmployees));
-        store.setItem('attendanceData', JSON.stringify(mergedAttendance));
+        store.setItem('employees', JSON.stringify(remoteEmployees));
+        store.setItem('attendanceData', JSON.stringify(remoteAttendance));
         return true;
     } catch (e) {
         console.error('❌ Load from Sheets error:', e);
