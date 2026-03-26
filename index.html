@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, shrink-to-fit=no">
+    <base href=".">
+    <title>Daily Attendance Tracker</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.0/font/bootstrap-icons.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Header -->
+    <nav class="navbar navbar-light bg-white shadow-sm">
+        <div class="container-fluid px-4">
+            <div class="d-flex align-items-center">
+                <div class="app-icon">
+                    <i class="bi bi-calendar-check-fill"></i>
+                </div>
+                <span class="navbar-brand mb-0 h1 ms-2">Daily Attendance Tracker</span>
+            </div>
+            <div class="d-flex align-items-center gap-3">
+                <div class="text-end datetime-display">
+                    <div class="fw-semibold current-time" id="currentTime"></div>
+                    <div class="text-muted current-date" id="currentDate"></div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid px-4 py-2">
+        <!-- Department Tabs -->
+        <div class="mb-2 d-flex justify-content-between align-items-center" id="tabBar">
+            <div class="btn-group" role="group">
+                <button type="button" class="btn btn-primary active" id="rvTab" onclick="switchDepartment('rv')">RV</button>
+                <button type="button" class="btn btn-outline-primary" id="comsTab" onclick="switchDepartment('coms')">Coms</button>
+            </div>
+            <div class="d-flex gap-2 align-items-center ms-auto">
+                <button class="btn btn-sm" onclick="toggleAdminView()" id="adminToggleBtn">
+                    <i class="bi bi-shield-lock me-1"></i>Admin
+                </button>
+                <div id="adminControls" style="display:none;" class="d-flex gap-2">
+                    <button class="btn btn-policy" data-bs-toggle="modal" data-bs-target="#policyModal" title="Attendance Policy">
+                        <i class="bi bi-info-circle"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-4 justify-content-center" id="mainRow">
+            <!-- Left: Attendance Log Form -->
+            <div class="col-lg-3" id="formCol">
+                <div class="card shadow-sm border-0 fixed-height-card">
+                    <div class="card-body">
+                        <div class="card-title-wrapper">
+                            <i class="bi bi-circle-fill text-success me-2" id="deptDot"></i>
+                            <h5 class="card-title mb-0">Report Attendance Log</h5>
+                        </div>
+                        
+                        <form id="attendanceForm">
+                            <div class="mb-3">
+                                <label for="employeeName" class="form-label">Employee Name</label>
+                                <input type="text" class="form-control" id="employeeName" placeholder="Enter employee name" list="employeeList" required aria-label="Employee Name">
+                                <datalist id="employeeList"></datalist>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="attendanceDate" class="form-label">Date</label>
+                                <input type="date" class="form-control" id="attendanceDate" required aria-label="Attendance Date">
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="attendanceStatus" class="form-label">Status</label>
+                                <select class="form-select" id="attendanceStatus" required aria-label="Attendance Status">
+                                    <option value="">Select status</option>
+                                    <option value="Present">P - Present</option>
+                                    <option value="Absent">A - Absent</option>
+                                    <option value="Late">L - Late</option>
+                                    <option value="Undertime">UT - Undertime</option>
+                                    <option value="AWOL">AWOL - Absent Without Official Leave</option>
+                                    <option value="Sick Leave">SL - Sick Leave / Vacation Leave</option>
+                                    <option value="No Schedule">NS - No Schedule</option>
+                                    <option value="Late and Undertime">L&UT - Late and Undertime</option>
+                                    <option value="Work From Home">WFH - Work From Home</option>
+                                </select>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="timeIn" class="form-label">Time In</label>
+                                <div class="d-flex align-items-center">
+                                    <input type="time" class="form-control" id="timeIn" aria-label="Time In">
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="timeOut" class="form-label">Time Out</label>
+                                <div class="d-flex align-items-center gap-2">
+                                    <input type="time" class="form-control" id="timeOut" aria-label="Time Out">
+                                    <button type="button" class="btn btn-emergency btn-sm icon-only" id="earlyOutBtn" onclick="openEarlyOutModal()" title="Emergency Out / Reason" aria-label="Emergency Out">
+                                        <i class="bi bi-exclamation-octagon-fill"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-outline-success btn-sm text-nowrap" id="returnWorkBtn" onclick="openReturnToWorkModal()" title="Return to Work" style="display:none;">
+                                        <i class="bi bi-box-arrow-in-right"></i> Return
+                                    </button>
+                                </div>
+                            </div>
+                            <input type="hidden" id="attendanceReason">
+                            
+                            <button type="submit" class="btn btn-primary w-100">
+                                <i class="bi bi-check-circle me-2"></i>Submit Attendance
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: Attendance Monitor -->
+            <div class="col-lg-9" id="adminPanel" style="display:none;">
+                <!-- Employee Dashboard -->
+                <div class="card shadow-sm border-0 fixed-height-card">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div>
+                                <h5 class="card-title mb-1 company-name" id="companyName">Red Victory Consumers Goods Trading</h5>
+                                <p class="text-muted mb-0 company-subtitle">Attendance Monitor</p>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button class="btn weekly-report-btn" data-bs-toggle="modal" data-bs-target="#weeklyReportModal">
+                                    <i class="bi bi-calendar-week me-2"></i>Weekly Report
+                                </button>
+                                <button class="btn btn-add-employee btn-sm" data-bs-toggle="modal" data-bs-target="#addEmployeeModal">
+                                    <i class="bi bi-plus-circle me-1"></i>Add Employee
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" onclick="resetMonthlyStats()" title="Reset Monthly Statistics">
+                                    <i class="bi bi-arrow-clockwise"></i>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="table-responsive table-container">
+                            <table class="table table-hover dashboard-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th class="text-center">Present</th>
+                                        <th class="text-center">Absent</th>
+                                        <th class="text-center">Late</th>
+                                        <th class="text-center">Total Lates (mins)</th>
+                                        <th class="text-center">Undertime</th>
+                                        <th class="text-center">Overtime</th>
+                                        <th class="text-center">AWOL</th>
+                                        <th class="text-center">Sick Leave / Vacation Leave</th>
+                                        <th class="text-center">WFH</th>
+                                        <th class="text-center">Sched Time</th>
+                                        <th class="text-center">Notes</th>
+                                        <th class="text-center">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dashboardTable">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Password Modal -->
+    <div class="modal fade" id="adminPasswordModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+        <div class="modal-dialog modal-sm modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h6 class="modal-title"><i class="bi bi-shield-lock me-2"></i>Admin Access</h6>
+                </div>
+                <div class="modal-body">
+                    <input type="password" class="form-control" id="adminPasswordInput" placeholder="Enter password" onkeydown="if(event.key==='Enter') verifyAdminPassword()">
+                    <div id="adminPasswordError" class="text-danger small mt-1" style="display:none;">Incorrect password.</div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal" onclick="document.getElementById('adminPasswordInput').value='';document.getElementById('adminPasswordError').style.display='none';">Cancel</button>
+                    <button type="button" class="btn btn-primary btn-sm" onclick="verifyAdminPassword()">Enter</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Employee Modal -->
+    <div class="modal fade" id="addEmployeeModal" tabindex="-1" aria-labelledby="addEmployeeModalLabel">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="addEmployeeModalLabel"><i class="bi bi-person-plus-fill me-2"></i>Add New Employee</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="addEmployeeForm">
+                        <div class="mb-3">
+                            <label for="newEmployeeName" class="form-label">Employee Name</label>
+                            <input type="text" class="form-control" id="newEmployeeName" placeholder="Enter employee name" required>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="scheduleStart" class="form-label">Schedule Time</label>
+                            <div class="row g-2">
+                                <div class="col-6">
+                                    <input type="time" class="form-control" id="scheduleStart" placeholder="Start" required>
+                                    <small class="text-muted">Start Time</small>
+                                </div>
+                                <div class="col-6">
+                                    <input type="time" class="form-control" id="scheduleEnd" placeholder="End" required>
+                                    <small class="text-muted">End Time</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label" id="weeklyDaysLabel">Weekly Days</label>
+                            <div class="d-flex flex-wrap gap-2">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Mon" id="dayMon">
+                                    <label class="form-check-label" for="dayMon">Mon</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Tue" id="dayTue">
+                                    <label class="form-check-label" for="dayTue">Tue</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Wed" id="dayWed">
+                                    <label class="form-check-label" for="dayWed">Wed</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Thu" id="dayThu">
+                                    <label class="form-check-label" for="dayThu">Thu</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Fri" id="dayFri">
+                                    <label class="form-check-label" for="dayFri">Fri</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Sat" id="daySat">
+                                    <label class="form-check-label" for="daySat">Sat</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Sun" id="daySun">
+                                    <label class="form-check-label" for="daySun">Sun</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Special Day Schedule (Optional)</label>
+                            <div id="specialDaysList"></div>
+                            <button type="button" class="btn btn-outline-secondary btn-sm mt-1" onclick="addSpecialDayRow('specialDaysList')"><i class="bi bi-plus-circle me-1"></i>Add Special Day</button>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Schedule Notes (Optional)</label>
+                            <div class="d-flex flex-wrap gap-2" id="snBtnGroup">
+                                <button type="button" class="btn btn-outline-secondary btn-sm sn-btn active" data-value="" onclick="selectSchedNote(this,'snBtnGroup')">None</button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm sn-btn" data-value="Flex" onclick="selectSchedNote(this,'snBtnGroup')">Flex</button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm sn-btn" data-value="With 1Hr OT" onclick="selectSchedNote(this,'snBtnGroup')">With 1Hr OT</button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm sn-btn" data-value="With 1Hr OT / Flex" onclick="selectSchedNote(this,'snBtnGroup')">With 1Hr OT / Flex</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="saveEmployee()"><i class="bi bi-save me-2"></i>Save Employee</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Policy Modal -->
+    <div class="modal fade" id="policyModal" tabindex="-1" aria-labelledby="policyModalLabel">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="policyModalLabel"><i class="bi bi-shield-check me-2"></i>Attendance Policy Guidelines</h5>
+                </div>
+                <div class="modal-body">
+                    <!-- AWOL Policy -->
+                    <div class="policy-section">
+                        <h6><i class="bi bi-exclamation-triangle-fill text-danger me-2"></i>AWOL (Absent Without Official Leave)</h6>
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-1"></div>
+                            <div class="policy-content">
+                                <strong>1st Offense</strong>
+                                <span>1-day suspension</span>
+                            </div>
+                        </div>
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-2"></div>
+                            <div class="policy-content">
+                                <strong>2nd Offense</strong>
+                                <span>3-day suspension</span>
+                            </div>
+                        </div>
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-3"></div>
+                            <div class="policy-content">
+                                <strong>3rd Offense</strong>
+                                <span>5-day suspension</span>
+                            </div>
+                        </div>
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-4"></div>
+                            <div class="policy-content">
+                                <strong>Repeated Offense</strong>
+                                <span>Termination</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Habitual Absences / Undertime -->
+                    <div class="policy-section">
+                        <h6><i class="bi bi-calendar-x-fill text-warning me-2"></i>Habitual Absences / Undertime</h6>
+                        <p class="text-muted mb-3"><small>Based on 3 absences in a month</small></p>
+                        
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-5"></div>
+                            <div class="policy-content">
+                                <strong>1 Absent / Late</strong>
+                                <span>Monitoring</span>
+                            </div>
+                        </div>
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-6"></div>
+                            <div class="policy-content">
+                                <strong>2 Absents / Late</strong>
+                                <span>Continued monitoring</span>
+                            </div>
+                        </div>
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-7"></div>
+                            <div class="policy-content">
+                                <strong>3 Absents / Late | 1st Offense</strong>
+                                <span>Verbal Warning</span>
+                            </div>
+                        </div>
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-8"></div>
+                            <div class="policy-content">
+                                <strong>4 Absents / Late</strong>
+                                <span>Continued monitoring</span>
+                            </div>
+                        </div>
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-9"></div>
+                            <div class="policy-content">
+                                <strong>5 Absents / Late</strong>
+                                <span>Continued monitoring</span>
+                            </div>
+                        </div>
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-10"></div>
+                            <div class="policy-content">
+                                <strong>6 Absents / Late | 2nd Offense</strong>
+                                <span>Final Written Warning</span>
+                            </div>
+                        </div>
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-11"></div>
+                            <div class="policy-content">
+                                <strong>3rd Offense</strong>
+                                <span>1-day suspension</span>
+                            </div>
+                        </div>
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-12"></div>
+                            <div class="policy-content">
+                                <strong>4th Offense</strong>
+                                <span>3-day suspension</span>
+                            </div>
+                        </div>
+                        <div class="policy-item">
+                            <div class="policy-color policy-color-13"></div>
+                            <div class="policy-content">
+                                <strong>5th Offense</strong>
+                                <span>Termination</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+    <script src="config.js"></script>
+    <script src="script.js"></script>
+
+    <!-- Weekly Report Modal -->
+    <div class="modal fade" id="weeklyReportModal" tabindex="-1" aria-labelledby="weeklyReportModalLabel">
+        <div class="modal-dialog modal-fullscreen">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="weeklyReportModalLabel"><i class="bi bi-calendar-week me-2"></i>Weekly Report</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="card shadow-sm border-0">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h5 class="card-title mb-0">Weekly Report</h5>
+                                <div class="d-flex align-items-center gap-3 filter-controls">
+                                    <div class="filter-item">
+                                        <label class="filter-label">DATE</label>
+                                        <input type="date" class="form-control form-control-sm" id="reportDatePicker" onchange="updateWeeklyReportByDate()" aria-label="Select date">
+                                    </div>
+                                    <div class="filter-divider">|</div>
+                                    <div class="filter-item">
+                                        <label class="filter-label">WEEKLY</label>
+                                        <input type="number" class="form-control form-control-sm week-input" id="weekNumberInput" placeholder="1-4" min="1" max="4" onchange="updateWeeklyReportByWeek()" aria-label="Week number">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="text-center mb-3">
+                                <h6 class="mb-0 fw-semibold text-primary" id="selectedDateModal"></h6>
+                            </div>
+                            
+                            <div class="table-responsive">
+                                <table class="table table-hover table-bordered">
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th>Schedule Time</th>
+                                            <th class="text-center">Total Hours</th>
+                                            <th class="text-center">Total Days</th>
+                                            <th class="text-center">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="weeklyReportTableModal">
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Early Out Modal -->
+    <div class="modal fade" id="earlyOutModal" tabindex="-1" aria-labelledby="earlyOutModalLabel">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="earlyOutModalLabel"><i class="bi bi-exclamation-octagon-fill me-2"></i>Emergency Out</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Time Out</label>
+                        <input type="time" class="form-control" id="earlyOutTime" aria-label="Emergency Out Time">
+                    </div>
+                    <div class="mb-3">
+                        <label for="earlyOutReason" class="form-label">Reason</label>
+                        <textarea class="form-control" id="earlyOutReason" rows="3" placeholder="e.g. important errand, medical appointment, family emergency..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-danger" onclick="submitEarlyOut()"><i class="bi bi-check-circle me-1"></i>Confirm Emergency Out</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Return to Work Modal -->
+    <div class="modal fade" id="returnToWorkModal" tabindex="-1" aria-labelledby="returnToWorkModalLabel">
+        <div class="modal-dialog modal-sm modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title" id="returnToWorkModalLabel"><i class="bi bi-box-arrow-in-right me-2"></i>Return to Work</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-3">Capture your return time to continue your work hours.</p>
+                    <div class="mb-2">
+                        <label class="form-label fw-semibold">Return Time In</label>
+                        <input type="time" class="form-control" id="returnTimeInInput" aria-label="Return Time In">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-success btn-sm" onclick="submitReturnToWork()"><i class="bi bi-check-circle me-1"></i>OK</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Submit Time Out Modal -->
+    <div class="modal fade" id="submitTimeoutModal" tabindex="-1" aria-labelledby="submitTimeoutModalLabel">
+        <div class="modal-dialog modal-sm modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h6 class="modal-title" id="submitTimeoutModalLabel"><i class="bi bi-clock-history me-2"></i>Submit Attendance</h6>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-0">Time Out recorded. Submit attendance to finalize your shift hours.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
+
+    <!-- Edit Employee Modal -->
+    <div class="modal fade" id="editEmployeeModal" tabindex="-1" aria-labelledby="editEmployeeModalLabel">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="editEmployeeModalLabel"><i class="bi bi-pencil-square me-2"></i>Edit Employee</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="editEmployeeId">
+                    <div class="mb-3">
+                        <label for="editEmployeeName" class="form-label">Employee Name</label>
+                        <input type="text" class="form-control" id="editEmployeeName" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editScheduleStart" class="form-label">Schedule Time</label>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <input type="time" class="form-control" id="editScheduleStart" required>
+                                <small class="text-muted">Start Time</small>
+                            </div>
+                            <div class="col-6">
+                                <input type="time" class="form-control" id="editScheduleEnd" required>
+                                <small class="text-muted">End Time</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" id="editWeeklyDaysLabel">Weekly Days</label>
+                        <div class="d-flex flex-wrap gap-2">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="editDayMon">
+                                <label class="form-check-label" for="editDayMon">Mon</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="editDayTue">
+                                <label class="form-check-label" for="editDayTue">Tue</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="editDayWed">
+                                <label class="form-check-label" for="editDayWed">Wed</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="editDayThu">
+                                <label class="form-check-label" for="editDayThu">Thu</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="editDayFri">
+                                <label class="form-check-label" for="editDayFri">Fri</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="editDaySat">
+                                <label class="form-check-label" for="editDaySat">Sat</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="editDaySun">
+                                <label class="form-check-label" for="editDaySun">Sun</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Special Day Schedule (Optional)</label>
+                        <div id="editSpecialDaysList"></div>
+                        <button type="button" class="btn btn-outline-secondary btn-sm mt-1" onclick="addSpecialDayRow('editSpecialDaysList')"><i class="bi bi-plus-circle me-1"></i>Add Special Day</button>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Schedule Notes (Optional)</label>
+                        <div class="d-flex flex-wrap gap-2" id="esnBtnGroup">
+                            <button type="button" class="btn btn-outline-secondary btn-sm sn-btn active" data-value="" onclick="selectSchedNote(this,'esnBtnGroup')">None</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm sn-btn" data-value="Flex" onclick="selectSchedNote(this,'esnBtnGroup')">Flex</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm sn-btn" data-value="With 1Hr OT" onclick="selectSchedNote(this,'esnBtnGroup')">With 1Hr OT</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm sn-btn" data-value="With 1Hr OT / Flex" onclick="selectSchedNote(this,'esnBtnGroup')">With 1Hr OT / Flex</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="saveEditEmployee()"><i class="bi bi-save me-2"></i>Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- View Schedule Modal -->
+    <div class="modal fade" id="scheduleModal" tabindex="-1" aria-labelledby="scheduleModalLabel">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="scheduleModalLabel"><i class="bi bi-calendar3 me-2"></i>Employee Schedule</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Employee Name</label>
+                        <p id="scheduleEmployeeName" class="fs-5"></p>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Schedule Time</label>
+                        <p id="scheduleTime" class="fs-5"><span class="badge bg-info text-dark"></span></p>
+                    </div>
+                    <div class="mb-3 schedule-notes-section" id="scheduleNotesSection">
+                        <label class="form-label fw-bold">Schedule Notes</label>
+                        <p id="scheduleNotesDisplay" class="fs-6 text-muted"></p>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Working Days</label>
+                        <p id="scheduleDays" class="fs-5"></p>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title" id="deleteModalLabel"><i class="bi bi-exclamation-triangle me-2"></i>Confirm Delete</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="deleteEmployeeId">
+                    <p>Are you sure you want to delete employee <strong id="deleteEmployeeName"></strong>?</p>
+                    <p class="text-danger mb-0"><small>This action cannot be undone.</small></p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">No</button>
+                    <button type="button" class="btn btn-danger" onclick="deleteEmployee()">Yes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Daily Report Zoom Modal -->
+    <div class="modal fade" id="reportZoomModal" tabindex="-1" aria-labelledby="reportZoomModalLabel">
+        <div class="modal-dialog modal-xl modal-fullscreen-lg-down">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="reportZoomModalLabel"><i class="bi bi-calendar-week me-2"></i>Daily Report - Full View</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="text-center mb-3">
+                        <h6 class="mb-0 fw-semibold text-primary" id="modalSelectedDate"></h6>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover table-bordered">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Status</th>
+                                    <th>Time In</th>
+                                    <th>Schedule Time</th>
+                                    <th>Date</th>
+                                    <th>Reason</th>
+                                    <th class="text-center">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="modalDailyReportTable">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+

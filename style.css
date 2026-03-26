@@ -1,0 +1,1679 @@
+:root {
+    --primary-color: #6366f1;
+    --primary-dark: #4f46e5;
+    --success-color: #10b981;
+    --success-dark: #059669;
+    --danger-color: #ef4444;
+    --danger-dark: #dc2626;
+    --warning-color: #f59e0b;
+    --info-color: #3b82f6;
+    --light-bg: #f8fafc;
+    --card-bg: #ffffff;
+    --border-color: #e2e8f0;
+    --text-primary: #1e293b;
+    --text-secondary: #64748b;
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', 'Roboto', sans-serif;
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    background-attachment: fixed;
+    color: var(--text-primary);
+    font-size: clamp(12px, 1vw, 14px);
+    line-height: 1.5;
+    transition: background 0.6s cubic-bezier(0.4,0,0.2,1);
+    padding-top: 56px;
+    min-height: 100dvh;
+    height: auto;
+    overflow: auto; /* allow page scrolling on small devices */
+    display: flex;
+    flex-direction: column;
+}
+
+/* Animated mesh background */
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background-image:
+        radial-gradient(ellipse at 20% 20%, rgba(255,255,255,0.18) 0%, transparent 55%),
+        radial-gradient(ellipse at 80% 80%, rgba(0,0,0,0.10) 0%, transparent 55%),
+        radial-gradient(ellipse at 60% 10%, rgba(255,255,255,0.10) 0%, transparent 40%);
+    animation: bgPulse 8s ease-in-out infinite alternate;
+}
+
+@keyframes bgPulse {
+    0%   { opacity: 0.7; transform: scale(1); }
+    100% { opacity: 1;   transform: scale(1.04); }
+}
+
+/* Floating orbs */
+body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+        radial-gradient(circle 320px at 10% 85%, rgba(255,255,255,0.12) 0%, transparent 70%),
+        radial-gradient(circle 200px at 90% 15%, rgba(255,255,255,0.10) 0%, transparent 70%);
+    animation: orbFloat 12s ease-in-out infinite alternate;
+}
+
+@keyframes orbFloat {
+    0%   { transform: translateY(0px) translateX(0px); }
+    100% { transform: translateY(-18px) translateX(10px); }
+}
+
+body.rv-active {
+    background: linear-gradient(135deg, #10b981 0%, #059669 50%, #047857 100%);
+}
+
+body.coms-active {
+    background: linear-gradient(135deg, #f87171 0%, #ef4444 50%, #dc2626 100%);
+}
+
+/* Navbar */
+.navbar {
+    padding: 0.4rem 0;
+    background: rgba(255, 255, 255, 0.88) !important;
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    border: none;
+    border-bottom: 1px solid rgba(255,255,255,0.5);
+    box-shadow: 0 2px 24px rgba(0,0,0,0.10);
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    transition: background 0.4s ease;
+    min-height: 52px;
+}
+.navbar-brand {
+    font-size: 0.95rem;
+    font-weight: 800;
+    color: var(--text-primary) !important;
+}
+
+.app-icon {
+    width: 30px;
+    height: 30px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 1.1rem;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+/* Company Logo */
+.company-logo-container {
+    width: 80px;
+    height: 80px;
+    margin-right: 15px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    padding: 8px;
+    transition: all 0.3s ease;
+}
+
+.company-logo-container:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.company-logo {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    border-radius: 8px;
+}
+
+/* Cards */
+.card {
+    border-radius: 20px;
+    border: 1px solid rgba(226, 232, 240, 0.8);
+    background: rgba(255,255,255,0.97);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.10), 0 1.5px 4px rgba(0,0,0,0.06);
+    transition: box-shadow 0.3s ease, transform 0.3s ease;
+    position: relative;
+    z-index: 1;
+}
+
+.card:hover {
+    box-shadow: 0 16px 40px rgba(0,0,0,0.14);
+    transform: translateY(-3px);
+}
+
+/* Card switch animation triggered by dept change */
+@keyframes cardSwitch {
+    0%   { opacity: 0.4; transform: translateY(12px) scale(0.98); }
+    100% { opacity: 1;   transform: translateY(0)   scale(1); }
+}
+
+.card-switch {
+    animation: cardSwitch 0.42s cubic-bezier(0.34,1.56,0.64,1) both;
+}
+
+/* PC/Desktop — fit to viewport, no scroll */
+.container-fluid.px-4.py-2 {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: auto; /* allow content to scroll on small devices */
+    padding-top: 0.4rem !important;
+    padding-bottom: 0.4rem !important;
+    padding-left: clamp(0.5rem, 1.5vw, 1.5rem) !important;
+    padding-right: clamp(0.5rem, 1.5vw, 1.5rem) !important;
+}
+
+#mainRow {
+    flex: 1;
+    overflow: auto; /* enable scrolling for row content */
+    align-items: flex-start;
+    justify-content: center;
+    min-height: 0;
+}
+
+/* Form col — fluid width, fits all resolutions */
+#formCol {
+    /* Slightly wider default form column for readability */
+    width: clamp(320px, 26vw, 480px) !important;
+    flex: 0 0 clamp(320px, 26vw, 480px) !important;
+    max-width: clamp(320px, 26vw, 480px) !important;
+    margin-left: 0 !important;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-bottom: 8px; /* breathing room for inputs */
+}
+
+#formCol .fixed-height-card {
+    height: auto !important;
+    max-height: calc(100dvh - 100px);
+    overflow-y: auto;
+}
+
+/* Admin panel — fills remaining height */
+#adminPanel {
+    flex: 1;
+    min-width: 0;
+    overflow: auto; /* allow admin panel to scroll when open */
+    min-height: 0;
+    align-self: flex-start;
+}
+
+#adminPanel .fixed-height-card {
+    height: auto !important;
+    max-height: calc(100dvh - 100px);
+}
+
+.fixed-height-card {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* When admin panel is open, form col stays fluid */
+#mainRow.admin-open #formCol {
+    width: clamp(300px, 22vw, 420px) !important;
+    flex: 0 0 clamp(300px, 22vw, 420px) !important;
+    max-width: clamp(300px, 22vw, 420px) !important;
+}
+
+/* Tablet & below — allow scroll */
+@media (max-width: 991px) {
+    body {
+        height: auto;
+        overflow-x: hidden;
+        overflow-y: auto;
+        display: block;
+        padding-top: 70px;
+    }
+    .container-fluid.px-4.py-2 {
+        flex: none;
+        display: block;
+        overflow: visible;
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
+    }
+    #mainRow {
+        overflow: visible;
+        align-items: unset;
+        justify-content: unset;
+    }
+    #formCol {
+        width: 100% !important;
+        max-width: 100% !important;
+        flex: none !important;
+    }
+    #formCol .fixed-height-card,
+    #adminPanel .fixed-height-card {
+        height: auto !important;
+        min-height: unset;
+        max-height: none !important;
+    }
+    #adminPanel {
+        width: 100% !important;
+    }
+}
+
+.fixed-height-card .card-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: clamp(0.65rem, 1vw, 1.1rem);
+}
+
+.fixed-height-card .table-container {
+    flex: 1;
+    max-height: none;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.card-body {
+    padding: clamp(0.75rem, 1.2vw, 1.25rem);
+}
+
+.card-title-wrapper {
+    display: flex;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.card-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+/* Form Styles */
+.form-label {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.4rem;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.form-control, .form-select {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    transition: all 0.2s ease;
+    background: var(--card-bg);
+    min-height: 44px; /* larger touch targets */
+    font-size: 0.95rem; /* easier to read */
+}
+
+.form-control:focus, .form-select:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    outline: none;
+}
+
+.form-control-sm {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.8rem;
+    border-radius: 8px;
+}
+
+/* Buttons */
+.btn {
+    font-weight: 600;
+    border-radius: 10px;
+    transition: all 0.2s ease;
+    font-size: 0.875rem;
+    padding: 0.5rem 1rem;
+    border: none;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+    color: white;
+    box-shadow: 0 2px 4px rgba(99, 102, 241, 0.2);
+}
+
+.btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(99, 102, 241, 0.3);
+}
+
+/* Action Buttons */
+.btn-sm {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8rem;
+    border-radius: 8px;
+    margin: 0 1px;
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+}
+
+.btn-outline-primary {
+    background: #f8fafc;
+    border-color: #3b82f6;
+    color: #3b82f6;
+}
+
+.btn-outline-primary:hover {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    color: white;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+.btn-outline-info {
+    background: #f0f9ff;
+    border-color: #0ea5e9;
+    color: #0ea5e9;
+}
+
+.btn-outline-info:hover {
+    background: #0ea5e9;
+    border-color: #0ea5e9;
+    color: white;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(14, 165, 233, 0.3);
+}
+
+.btn-outline-danger {
+    background: #fef2f2;
+    border-color: #ef4444;
+    color: #ef4444;
+}
+
+.btn-outline-danger:hover {
+    background: #ef4444;
+    border-color: #ef4444;
+    color: white;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+}
+
+/* Action button container */
+.text-center .btn {
+    margin: 0 1px;
+}
+
+.text-center .btn:first-child {
+    margin-left: 0;
+}
+
+.text-center .btn:last-child {
+    margin-right: 0;
+}
+
+/* Table Styles */
+.table {
+    margin-bottom: 0;
+    font-size: 0.8rem;
+}
+
+.table-container {
+    max-height: clamp(280px, calc(100dvh - 260px), 600px);
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: white;
+}
+
+.table-container::-webkit-scrollbar {
+    width: 8px;
+}
+
+.table-container::-webkit-scrollbar-track {
+    background: #f1f5f9;
+    border-radius: 4px;
+}
+
+.table-container::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+
+.table-container::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+.table thead th {
+    background: linear-gradient(to bottom, #f8fafc, #f1f5f9);
+    color: var(--text-primary);
+    font-weight: 700;
+    font-size: clamp(0.58rem, 0.6vw, 0.68rem);
+    border-bottom: 2px solid var(--border-color);
+    padding: 0.45rem 0.3rem;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.table tbody tr {
+    transition: all 0.15s ease;
+}
+
+.table tbody tr:hover {
+    background-color: #f8fafc;
+}
+
+.table tbody td {
+    padding: 0.4rem 0.3rem;
+    vertical-align: middle;
+    font-size: clamp(0.72rem, 0.75vw, 0.82rem);
+}
+
+.dashboard-table {
+    font-size: clamp(0.62rem, 0.7vw, 0.75rem);
+    table-layout: fixed;
+    width: 100%;
+}
+
+.dashboard-table td {
+    padding: 0.3rem 0.2rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dashboard-table th {
+    padding: 0.3rem 0.2rem;
+    font-size: clamp(0.55rem, 0.58vw, 0.65rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Column widths — fluid percentages that fit all resolutions */
+.dashboard-table th:nth-child(1),
+.dashboard-table td:nth-child(1) { width: 15%; }
+.dashboard-table th:nth-child(2),
+.dashboard-table td:nth-child(2),
+.dashboard-table th:nth-child(3),
+.dashboard-table td:nth-child(3),
+.dashboard-table th:nth-child(4),
+.dashboard-table td:nth-child(4) { width: 6%; }
+.dashboard-table th:nth-child(5),
+.dashboard-table td:nth-child(5) { width: 8%; }
+.dashboard-table th:nth-child(6),
+.dashboard-table td:nth-child(6),
+.dashboard-table th:nth-child(7),
+.dashboard-table td:nth-child(7) { width: 6%; }
+.dashboard-table th:nth-child(8),
+.dashboard-table td:nth-child(8) { width: 5%; }
+.dashboard-table th:nth-child(9),
+.dashboard-table td:nth-child(9) { width: 9%; }
+.dashboard-table th:nth-child(10),
+.dashboard-table td:nth-child(10) { width: 9%; }
+.dashboard-table th:nth-child(11),
+.dashboard-table td:nth-child(11) { width: 9%; }
+.dashboard-table th:last-child,
+.dashboard-table td:last-child { width: 12%; }
+
+/* Status Badges */
+.badge-status {
+    padding: 0.3rem 0.75rem;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 0.7rem;
+    display: inline-block;
+    text-transform: uppercase;
+}
+
+.status-present {
+    background: #BFDBFE;
+    color: #1e3a8a;
+}
+
+.status-late {
+    background: #FED7AA;
+    color: #7c2d12;
+}
+
+.status-absent {
+    background: #FCA5A5;
+    color: #7f1d1d;
+}
+
+.status-undertime {
+    background: #E9D5FF;
+    color: #581c87;
+}
+
+.status-overtime {
+    background: #BFDBFE;
+    color: #1e3a8a;
+}
+
+.status-awol {
+    background: #FCA5A5;
+    color: #7f1d1d;
+}
+
+.status-sick {
+    background: #BFDBFE;
+    color: #1e3a8a;
+}
+
+.status-wfh {
+    background: #D1FAE5;
+    color: #065f46;
+}
+
+.badge {
+    padding: 0.3rem 0.6rem;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 0.7rem;
+}
+
+.badge.bg-info {
+    background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%) !important;
+    color: #075985 !important;
+    font-size: 0.6rem !important;
+    padding: 0.2rem 0.4rem !important;
+    white-space: nowrap;
+}
+
+/* Policy Modal */
+.policy-section {
+    margin-bottom: 1.5rem;
+}
+
+.policy-section h6 {
+    color: #2c3e50;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #e9ecef;
+}
+
+.policy-item {
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    background-color: #f8f9fa;
+}
+
+.policy-color {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    margin-right: 1rem;
+}
+
+.policy-content {
+    flex: 1;
+}
+
+.policy-content strong {
+    display: block;
+    color: #2c3e50;
+    margin-bottom: 0.25rem;
+}
+
+.policy-content span {
+    color: #6c757d;
+    font-size: 0.9rem;
+}
+
+/* Policy Color Classes */
+.policy-color-1 {
+    background: #F4E4A6;
+}
+
+.policy-color-2 {
+    background: #E8C89A;
+}
+
+.policy-color-3 {
+    background: #D9956B;
+}
+
+.policy-color-4 {
+    background: #C1503A;
+}
+
+.policy-color-5 {
+    background: #F4E4A6;
+}
+
+.policy-color-6 {
+    background: #D9C4A8;
+}
+
+.policy-color-7 {
+    background: #D9956B;
+}
+
+.policy-color-8 {
+    background: #D4B5A8;
+}
+
+.policy-color-9 {
+    background: #C98B7A;
+}
+
+.policy-color-10 {
+    background: #B85C52;
+}
+
+.policy-color-11 {
+    background: #A63D3D;
+}
+
+.policy-color-12 {
+    background: #8B2E2E;
+}
+
+.policy-color-13 {
+    background: #3D3D3D;
+}
+
+/* Apply policy colors to table cells */
+td.policy-color-1,
+td.policy-color-2,
+td.policy-color-3,
+td.policy-color-4,
+td.policy-color-5,
+td.policy-color-6,
+td.policy-color-7,
+td.policy-color-8,
+td.policy-color-9,
+td.policy-color-10,
+td.policy-color-11,
+td.policy-color-12,
+td.policy-color-13 {
+    font-weight: 700;
+    color: #000 !important;
+}
+
+td.policy-color-13 {
+    color: #fff !important;
+}
+
+/* Text color classes based on status - Higher specificity */
+.table .text-present {
+    color: #10b981 !important;
+    font-weight: 600 !important;
+}
+
+.table .text-late {
+    color: #f59e0b !important;
+    font-weight: 600 !important;
+}
+
+.table .text-absent {
+    color: #ef4444 !important;
+    font-weight: 600 !important;
+}
+
+.table .text-undertime {
+    color: #8b5cf6 !important;
+    font-weight: 600 !important;
+}
+
+.table .text-overtime {
+    color: #3b82f6 !important;
+    font-weight: 600 !important;
+}
+
+.table .text-awol {
+    color: #dc2626 !important;
+    font-weight: 600 !important;
+}
+
+.table .text-sick {
+    color: #06b6d4 !important;
+    font-weight: 600 !important;
+}
+
+.table .text-wfh {
+    color: #059669 !important;
+    font-weight: 600 !important;
+}
+
+/* Department Tabs */
+.btn-group .btn {
+    padding: 0.6rem 1.8rem;
+    font-weight: 700;
+    transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    font-size: 0.85rem;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    border: none;
+    margin: 0 3px;
+    position: relative;
+    overflow: hidden;
+}
+
+.btn-group .btn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(255,255,255,0.15);
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.btn-group .btn:hover::before {
+    opacity: 1;
+}
+
+#rvTab {
+    background: rgba(255,255,255,0.18);
+    color: white;
+    border-radius: 14px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1.5px solid rgba(255,255,255,0.35);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.3);
+    text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+}
+
+#rvTab:hover {
+    background: rgba(255,255,255,0.28);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.4);
+    border-color: rgba(255,255,255,0.55);
+}
+
+#rvTab.active {
+    background: linear-gradient(135deg, #ffffff 0%, #e2faf0 100%) !important;
+    color: #065f46 !important;
+    border-color: rgba(255,255,255,0.9) !important;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.18), 0 0 0 3px rgba(255,255,255,0.25), inset 0 1px 0 rgba(255,255,255,1) !important;
+    transform: translateY(-3px);
+    text-shadow: none;
+    border-radius: 14px;
+}
+
+#comsTab {
+    background: rgba(255,255,255,0.18);
+    color: white;
+    border-radius: 14px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1.5px solid rgba(255,255,255,0.35);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.3);
+    text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+}
+
+#comsTab:hover {
+    background: rgba(255,255,255,0.28);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.4);
+    border-color: rgba(255,255,255,0.55);
+}
+
+#comsTab.active {
+    background: linear-gradient(135deg, #ffffff 0%, #fef2f2 100%) !important;
+    color: #991b1b !important;
+    border-color: rgba(255,255,255,0.9) !important;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.18), 0 0 0 3px rgba(255,255,255,0.25), inset 0 1px 0 rgba(255,255,255,1) !important;
+    transform: translateY(-3px);
+    text-shadow: none;
+    border-radius: 14px;
+}
+
+/* Weekly Report Button */
+.weekly-report-btn {
+    background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 20px !important;
+    padding: 0.45rem 1.1rem !important;
+    font-weight: 700 !important;
+    font-size: 0.8rem !important;
+    box-shadow: 0 4px 12px rgba(14, 165, 233, 0.35) !important;
+    transition: all 0.3s ease !important;
+}
+
+.weekly-report-btn:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 18px rgba(14, 165, 233, 0.5) !important;
+    background: linear-gradient(135deg, #0284c7 0%, #0ea5e9 100%) !important;
+    color: white !important;
+}
+
+/* Add Employee Button */
+.btn-add-employee {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: white;
+    border: none;
+    border-radius: 20px;
+    padding: 0.45rem 1.1rem;
+    font-weight: 700;
+    font-size: 0.8rem;
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35);
+    transition: all 0.3s ease;
+}
+
+.btn-add-employee:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(16, 185, 129, 0.5);
+    background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+    color: white;
+}
+
+/* Attendance Policy Button */
+.btn-policy {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    color: white;
+    border: none;
+    border-radius: 20px;
+    padding: 0.45rem 0.75rem;
+    font-weight: 700;
+    font-size: 0.9rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    transition: all 0.3s ease;
+}
+
+.btn-policy:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    color: white;
+}
+
+/* Admin Toggle Button */
+#adminToggleBtn {
+    background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
+    color: #374151;
+    border: 1.5px solid rgba(255,255,255,0.8);
+    border-radius: 20px;
+    padding: 0.45rem 1.1rem;
+    font-weight: 700;
+    font-size: 0.8rem;
+    letter-spacing: 0.3px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.9);
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+#adminToggleBtn:hover {
+    transform: translateY(-2px);
+    background: linear-gradient(135deg, #ffffff 0%, #e2e8f0 100%);
+    color: #1e293b;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.20), inset 0 1px 0 rgba(255,255,255,1);
+}
+
+#adminToggleBtn.btn-secondary {
+    background: linear-gradient(135deg, #ffffff 0%, #e2e8f0 100%);
+    color: #1e293b;
+    border-color: rgba(255,255,255,0.9);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18), 0 0 0 3px rgba(255,255,255,0.3), inset 0 1px 0 rgba(255,255,255,1);
+}
+
+#adminToggleBtn.btn-secondary:hover {
+    box-shadow: 0 6px 20px rgba(0,0,0,0.22), 0 0 0 4px rgba(255,255,255,0.35), inset 0 1px 0 rgba(255,255,255,1);
+}
+
+/* Daily Report Button */
+.btn-white {
+    background: white !important;
+    color: var(--text-primary) !important;
+    border: 2px solid white !important;
+    font-weight: 600;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+}
+
+/* Emergency button style */
+.btn-emergency {
+    --btn-bg-start: #ef4444;
+    --btn-bg-end: #dc2626;
+    background: linear-gradient(180deg, var(--btn-bg-start), var(--btn-bg-end));
+    color: #fff;
+    border: none;
+    box-shadow: 0 6px 18px rgba(220, 38, 38, 0.18);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.btn-emergency:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 26px rgba(220, 38, 38, 0.22);
+}
+.btn-emergency:active {
+    transform: translateY(0);
+}
+.btn-emergency i { font-size: 0.95rem; }
+
+/* Small variation for emergency button when used with .btn-sm */
+.btn-emergency.btn-sm {
+    padding: 0.28rem 0.5rem;
+    font-size: 0.78rem;
+    border-radius: 8px;
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.btn-emergency.btn-sm i { font-size: 0.85rem; }
+
+/* Icon-only emergency button (circular) */
+.btn-emergency.icon-only {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 6px 18px rgba(220, 38, 38, 0.18);
+}
+.btn-emergency.icon-only i {
+    font-size: 1.05rem;
+}
+.btn-emergency.icon-only:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 26px rgba(220, 38, 38, 0.24);
+}
+
+/* Slightly smaller on compact/small screens */
+@media (max-width: 480px) {
+    .btn-emergency.icon-only { width: 36px; height: 36px; }
+    .btn-emergency.icon-only i { font-size: 0.95rem; }
+}
+
+.btn-white:hover {
+    background: var(--light-bg) !important;
+    border-color: var(--primary-color) !important;
+    color: var(--primary-color) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transform: translateY(-2px);
+}
+
+#dailyReportBtn {
+    background: white !important;
+    color: var(--text-primary) !important;
+    border: 2px solid var(--border-color) !important;
+    font-weight: 600;
+}
+
+#dailyReportBtn:hover {
+    background: var(--light-bg) !important;
+    border-color: var(--text-secondary) !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.btn-group-sm .btn {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+/* Medium laptops 1280px–1366px */
+@media (min-width: 992px) and (max-width: 1366px) {
+    #formCol {
+        width: clamp(260px, 21vw, 320px) !important;
+        flex: 0 0 clamp(260px, 21vw, 320px) !important;
+        max-width: clamp(260px, 21vw, 320px) !important;
+    }
+    #mainRow.admin-open #formCol {
+        width: clamp(240px, 19vw, 300px) !important;
+        flex: 0 0 clamp(240px, 19vw, 300px) !important;
+        max-width: clamp(240px, 19vw, 300px) !important;
+    }
+    .card-body {
+        padding: 0.75rem 0.85rem;
+    }
+    .fixed-height-card .card-body {
+        padding: 0.65rem 0.75rem;
+    }
+    .form-control, .form-select {
+        padding: 0.4rem 0.65rem;
+        font-size: 0.82rem;
+    }
+    .mb-3 {
+        margin-bottom: 0.6rem !important;
+    }
+    .btn-primary.w-100 {
+        padding: 0.5rem;
+    }
+    .company-name {
+        font-size: 0.82rem;
+    }
+    .weekly-report-btn,
+    .btn-add-employee {
+        padding: 0.38rem 0.7rem !important;
+        font-size: 0.72rem !important;
+    }
+}
+
+@media (max-width: 992px) {
+    .col-lg-3 {
+        margin-bottom: 1.5rem;
+    }
+}
+
+@media (max-width: 768px) {
+    .navbar-brand {
+        font-size: 1rem;
+    }
+}
+
+/* Animations */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.card {
+    animation: fadeIn 0.5s ease;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 4px;
+}
+
+/* Text Colors */
+.text-success {
+    color: var(--success-color) !important;
+}
+
+.text-warning {
+    color: var(--warning-color) !important;
+}
+
+.text-danger {
+    color: var(--danger-color) !important;
+}
+
+/* Schedule Note toggle buttons */
+.sn-btn { border: 1.5px solid #cbd5e1; color: #475569; background: #f8fafc; }
+.sn-btn.active { background: #6366f1; border-color: #6366f1; color: #fff; }
+.sn-btn:hover:not(.active) { background: #e2e8f0; border-color: #94a3b8; }
+
+
+.filter-controls {
+    flex-wrap: wrap;
+    gap: 0.5rem !important;
+}
+
+.filter-controls .form-control,
+.filter-controls .form-select {
+    min-width: 120px;
+}
+
+.week-input {
+    max-width: 80px !important;
+    text-align: center;
+}
+
+/* Professional DATE | WEEKLY Filter Design */
+.filter-controls {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    background: #f8fafc;
+    padding: 0.75rem 1rem;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+}
+
+.filter-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.filter-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.filter-divider {
+    font-size: 1.25rem;
+    font-weight: 300;
+    color: #cbd5e1;
+    margin: 0 0.5rem;
+}
+
+.filter-item .form-control {
+    min-width: 140px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    padding: 0.5rem 0.75rem;
+    background: white;
+    transition: all 0.2s ease;
+}
+
+.filter-item .form-control:focus {
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    outline: none;
+}
+
+.week-input {
+    text-align: center;
+    min-width: 80px !important;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .filter-controls {
+        flex-direction: column;
+        gap: 1rem;
+        padding: 1rem;
+    }
+    
+    .filter-divider {
+        display: none;
+    }
+    
+    .filter-item .form-control {
+        min-width: 200px;
+    }
+}
+
+/* ===== RESPONSIVE MOBILE — PROFESSIONAL UI/UX ===== */
+
+/* ---------- Tablet (≤991px) ---------- */
+@media (max-width: 991px) {
+    body {
+        height: auto;
+        overflow: auto;
+        padding-top: 70px;
+        background-attachment: scroll;
+    }
+
+    .fixed-height-card {
+        height: auto;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.13);
+    }
+
+    .fixed-height-card .card-body {
+        overflow: visible;
+    }
+
+    .fixed-height-card .table-container {
+        height: auto;
+        max-height: 420px;
+    }
+
+    #formCol,
+    #adminPanel {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin-left: 0 !important;
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    .col-lg-3,
+    .col-lg-4,
+    .col-lg-9 {
+        width: 100% !important;
+        max-width: 100% !important;
+
+/* Responsive overrides: enable touch scrolling and mobile layout tweaks */
+html, body {
+    height: 100%;
+}
+
+.container-fluid.px-4.py-2 {
+    -webkit-overflow-scrolling: touch;
+    overflow: auto;
+}
+
+#mainRow, #formCol, #adminPanel, .fixed-height-card .table-container {
+    -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 991px) {
+    /* stack columns and allow natural document flow on tablets and phones */
+    #formCol {
+        width: 100% !important;
+        flex: none !important;
+        max-width: 100% !important;
+        margin-bottom: 0.75rem !important;
+    }
+    #adminPanel {
+        width: 100% !important;
+        flex: none !important;
+        display: block !important;
+    }
+    body {
+        padding-top: 56px; /* keep header visible */
+        min-height: 100vh;
+    }
+}
+
+@media (max-width: 480px) {
+    /* tighten paddings for very small screens */
+    .container-fluid.px-4.py-2 {
+        padding-left: 0.6rem !important;
+        padding-right: 0.6rem !important;
+    }
+    .btn-group .btn {
+        padding: 0.45rem 0.9rem;
+        font-size: 0.72rem;
+    }
+}
+
+/* Global overflow safeguards: prevent page horizontal scroll on any device */
+html, body {
+    overscroll-behavior-x: none;
+    overflow-x: hidden; /* prevent horizontal page overflow */
+}
+
+/* Ensure main layout containers never exceed viewport width */
+.container-fluid.px-4.py-2, #mainRow, #formCol, #adminPanel, .fixed-height-card {
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+/* Tables should be responsive inside their container, not cause page overflow */
+.table-container, .table-responsive {
+    max-width: 100%;
+    overflow-x: auto; /* allow internal scrolling if table is wider */
+}
+
+.dashboard-table, .table {
+    width: 100%;
+    max-width: 100%;
+    table-layout: fixed;
+}
+
+/* Force long words/strings to break instead of expanding layout */
+td, th, .btn, .navbar-brand {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+/* Limit very wide elements (images/icons) */
+img, .company-logo, .app-icon {
+    max-width: 100%;
+    height: auto;
+}
+
+/* Reduce accidental large horizontal padding on very narrow viewports */
+@media (max-width: 1200px) {
+    .container-fluid.px-4.py-2 {
+        padding-left: clamp(0.5rem, 1vw, 1rem) !important;
+        padding-right: clamp(0.5rem, 1vw, 1rem) !important;
+    }
+}
+    }
+
+    .offset-lg-4 {
+        margin-left: 0 !important;
+    }
+}
+
+/* ---------- Mobile (≤767px) ---------- */
+@media (max-width: 767px) {
+
+    /* Body */
+    body {
+        padding-top: 68px;
+        font-size: 13px;
+    }
+
+    /* Navbar — compact, clean */
+    .navbar {
+        padding: 0.55rem 0;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.10);
+    }
+
+    .navbar .container-fluid {
+        padding-left: 0.85rem;
+        padding-right: 0.85rem;
+    }
+
+    .app-icon {
+        width: 32px;
+        height: 32px;
+        font-size: 1rem;
+        border-radius: 10px;
+    }
+
+    .navbar-brand {
+        font-size: 0.92rem;
+        letter-spacing: -0.2px;
+    }
+
+    .datetime-display {
+        text-align: right;
+    }
+
+    .current-time {
+        font-size: 0.78rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+
+    .current-date {
+        font-size: 0.65rem;
+        color: #94a3b8;
+    }
+
+    /* Tab bar — align tabs, admin controls and policy inline */
+    #tabBar {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        position: static !important;
+        padding: 0.35rem 0.25rem 0.25rem;
+        width: 100%;
+        justify-content: flex-start;
+        flex-wrap: nowrap;
+    }
+
+    #tabBar > div:first-child {
+        display: none; /* empty spacer div kept hidden */
+    }
+
+    #tabBar .btn-group {
+        position: static !important;
+        transform: none !important;
+        order: initial;
+        width: auto;
+        justify-content: flex-start;
+        gap: 0.5rem;
+        align-items: center;
+    }
+
+    #tabBar .btn-group.me-auto {
+        width: auto;
+        justify-content: flex-start;
+    }
+
+    #tabBar > div:last-child {
+        order: initial;
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    /* RV / Coms tab buttons — pill style, consistent height */
+    #rvTab,
+    #comsTab {
+        padding: 0 1rem;
+        font-size: 0.86rem;
+        font-weight: 800;
+        border-radius: 14px;
+        letter-spacing: 0.4px;
+        border-width: 2px;
+        min-width: 72px;
+        height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+    }
+
+    /* Admin button — compact and aligned */
+    #adminToggleBtn {
+        padding: 0 0.75rem;
+        font-size: 0.82rem;
+        border-radius: 10px;
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        visibility: visible !important;
+        opacity: 1 !important;
+        gap: 0.4rem;
+        height: 40px;
+    }
+
+    /* small admin controls container */
+    #adminControls { display: inline-flex; align-items: center; gap: 0.45rem; }
+
+    /* attendance policy button */
+    .btn-policy { height: 38px; padding: 0.28rem 0.5rem; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px; }
+
+    /* Main content area */
+    .container-fluid.px-4 {
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
+        padding-top: 0.5rem !important;
+    }
+
+    /* Form card — full width, generous padding */
+    #formCol {
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
+    }
+
+    .card {
+        border-radius: 18px;
+        box-shadow: 0 6px 24px rgba(0,0,0,0.13);
+    }
+
+    .card:hover {
+        transform: none; /* disable lift on mobile */
+    }
+
+    .card-body {
+        padding: 1.1rem 1rem;
+    }
+
+    .card-title-wrapper {
+        margin-bottom: 0.85rem;
+        padding-bottom: 0.65rem;
+    }
+
+    .card-title {
+        font-size: 0.95rem;
+    }
+
+    /* Form fields — larger touch targets */
+    .form-label {
+        font-size: 0.72rem;
+        margin-bottom: 0.3rem;
+    }
+
+    .form-control,
+    .form-select {
+        padding: 0.6rem 0.85rem;
+        font-size: 0.875rem;
+        border-radius: 10px;
+        min-height: 44px;
+    }
+
+    .mb-3 {
+        margin-bottom: 0.75rem !important;
+    }
+
+    /* Submit button — full width, tall touch target */
+    .btn-primary.w-100 {
+        padding: 0.75rem;
+        font-size: 0.9rem;
+        border-radius: 12px;
+        letter-spacing: 0.2px;
+        margin-top: 0.25rem;
+    }
+
+    /* Early Out button */
+    .btn-outline-warning.btn-sm {
+        padding: 0.45rem 0.65rem;
+        font-size: 0.75rem;
+        white-space: nowrap;
+    }
+
+    /* Admin panel — table scrollable */
+    .table-responsive {
+        overflow-x: auto;
+        border-radius: 10px;
+    }
+
+    .dashboard-table {
+        min-width: 680px;
+    }
+
+    .company-name {
+        font-size: 0.88rem;
+        line-height: 1.3;
+    }
+
+    .company-subtitle {
+        font-size: 0.72rem;
+    }
+
+    .weekly-report-btn,
+    .btn-add-employee {
+        padding: 0.38rem 0.7rem !important;
+        font-size: 0.72rem !important;
+        border-radius: 14px !important;
+    }
+
+    /* Row gap between form and admin panel */
+    .row.g-4 {
+        gap: 0.75rem 0;
+    }
+}
+
+/* ---------- Small phones (≤480px) ---------- */
+@media (max-width: 480px) {
+    body {
+        padding-top: 64px;
+    }
+
+    .navbar-brand {
+        font-size: 0.82rem;
+    }
+
+    .app-icon {
+        width: 28px;
+        height: 28px;
+        font-size: 0.9rem;
+        border-radius: 8px;
+    }
+
+    #rvTab,
+    #comsTab {
+        padding: 0.35rem 0.9rem;
+        font-size: 0.72rem;
+        min-width: 56px;
+    }
+
+    #adminToggleBtn {
+        padding: 0.32rem 0.7rem;
+        font-size: 0.7rem;
+    }
+
+    .card-body {
+        padding: 0.9rem 0.85rem;
+    }
+
+    .form-control,
+    .form-select {
+        font-size: 0.82rem;
+        min-height: 42px;
+    }
+
+    .btn-primary.w-100 {
+        padding: 0.7rem;
+        font-size: 0.85rem;
+    }
+}
+
+/* ===== RESPONSIVE FIT ENHANCEMENTS =====
+   Ensure the layout scales and remains usable on laptops, older/low-res PCs,
+   and varied desktops (Dell, older monitors) while preserving design. */
+
+@media (max-width: 1366px) {
+    body { font-size: 0.98rem; }
+    .container-fluid.px-4.py-2 { padding-left: 1rem; padding-right: 1rem; }
+    #formCol { width: clamp(300px, 28vw, 460px) !important; }
+    .dashboard-table td, .dashboard-table th { font-size: 0.78rem; }
+}
+
+@media (max-width: 1200px) {
+    body { font-size: 0.95rem; }
+    #formCol { width: clamp(280px, 32vw, 420px) !important; }
+    .btn { padding: 0.45rem 0.8rem; }
+    .card { border-radius: 14px; }
+}
+
+@media (max-width: 1024px) {
+    /* Stack columns vertically for narrower laptop screens */
+    #mainRow { flex-direction: column; gap: 0.8rem; }
+    #formCol, #adminPanel { width: 100% !important; max-width: 100% !important; }
+    #adminPanel { margin-top: 0.6rem; }
+    .table-container { max-height: 420px; }
+    .card-body { padding: 0.8rem; }
+}
+
+@media (max-width: 800px) {
+    body { font-size: 0.92rem; }
+    .btn { font-size: 0.82rem; padding: 0.4rem 0.6rem; }
+    .btn-emergency { padding: 0.35rem 0.6rem; }
+    .app-icon { width: 26px; height: 26px; }
+    .navbar-brand { font-size: 0.95rem; }
+    .fixed-height-card .table-container { max-height: 360px; }
+}
+
+@media (max-width: 480px) {
+    body { font-size: 0.86rem; }
+    .container-fluid.px-4.py-2 { padding-left: 0.6rem; padding-right: 0.6rem; }
+    .btn { padding: 0.35rem 0.5rem; font-size: 0.78rem; }
+    .card { border-radius: 10px; }
+    .form-control, .form-select { min-height: 40px; }
+    .dashboard-table td, .dashboard-table th { font-size: 0.68rem; }
+}
+
+/* Legacy / low-resolution fallback: reduce heavy shadows and reserve space
+   so older GPUs and smaller CRT/LCD monitors render cleanly */
+@media (max-width: 1366px) and (max-height: 768px) {
+    .card, .btn, .table { box-shadow: none; }
+    .navbar { box-shadow: none; }
+}
+

@@ -1,0 +1,2655 @@
+// Storage wrapper to handle tracking prevention
+const storage = (() => {
+    const mem = {};
+    let _ls = null;
+    // Test localStorage once silently
+    try {
+        localStorage.setItem('__test__', '1');
+        localStorage.removeItem('__test__');
+        _ls = localStorage;
+    } catch (e) { /* blocked by tracking prevention, fall back to in-memory */ }
+    return {
+        getItem(key) {
+            return _ls ? _ls.getItem(key) : (mem[key] ?? null);
+        },
+        setItem(key, value) {
+            if (_ls) { try { _ls.setItem(key, value); return; } catch(e) { _ls = null; } }
+            mem[key] = value;
+        }
+    };
+})();
+
+// Note: syncToGoogleSheets function is defined in config.js
+
+function syncDashboardToSheets() {
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    const attendanceData = loadAttendanceData();
+    
+    const deptEmployees = employees.filter(e => e.department === currentDepartment);
+    
+    const employeeStats = deptEmployees.map(emp => {
+        const stats = {
+            name: emp.name,
+            present: 0,
+            absent: 0,
+            late: 0,
+            totalLates: 0,
+            undertime: 0,
+            overtime: 0,
+            awol: 0,
+            sickLeave: 0,
+            wfh: 0,
+            scheduleDisplay: emp.scheduleDisplay
+        };
+        
+        attendanceData.forEach(record => {
+            if (record.name === emp.name && record.department === currentDepartment) {
+                switch(record.status) {
+                    case 'Present': stats.present++; break;
+                    case 'Absent': stats.absent++; break;
+                    case 'Late': 
+                        stats.late++; 
+                        stats.totalLates += record.lateMinutes || 15;
+                        break;
+                    case 'Undertime': stats.undertime++; break;
+                    case 'Overtime': stats.overtime++; break;
+                    case 'AWOL': stats.awol++; break;
+                    case 'Sick Leave': stats.sickLeave++; break;
+                    case 'Work From Home': stats.wfh++; break;
+                }
+            }
+        });
+        
+        return stats;
+    });
+    
+    syncToGoogleSheets('dashboard', { employees: employeeStats });
+}
+
+function syncWeeklyReportToSheets() {
+    const attendanceData = loadAttendanceData();
+    const deptRecords = attendanceData.filter(r => r.department === currentDepartment);
+    syncToGoogleSheets('weeklyReport', { records: deptRecords });
+}
+
+// Get policy color based on AWOL count
+function getAWOLPolicyColor(awolCount) {
+    if (awolCount === 0) return '';
+    if (awolCount === 1) return 'policy-color-1';
+    if (awolCount === 2) return 'policy-color-2';
+    if (awolCount === 3) return 'policy-color-3';
+    return 'policy-color-4'; // 4 or more
+}
+
+// Get policy color based on Absent/Late count (Habitual)
+function getHabitualPolicyColor(count) {
+    if (count === 0) return '';
+    if (count === 1) return 'policy-color-5';
+    if (count === 2) return 'policy-color-6';
+    if (count === 3) return 'policy-color-7';
+    if (count === 4) return 'policy-color-8';
+    if (count === 5) return 'policy-color-9';
+    if (count === 6) return 'policy-color-10';
+    if (count === 7) return 'policy-color-11';
+    if (count === 8) return 'policy-color-12';
+    return 'policy-color-13'; // 9 or more
+}
+
+// Helper: get local date in ISO (YYYY-MM-DD) accounting for timezone offset
+function getLocalISODate() {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().split('T')[0];
+}
+
+// Current filter date (use local date)
+let currentFilterDate = getLocalISODate();
+let currentFilterMode = 'day'; // 'day' or 'week'
+let currentWeek = null;
+
+// Filter by week
+function filterByWeek(weekNumber) {
+    currentFilterMode = 'week';
+    currentWeek = weekNumber;
+    
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    
+    // Calculate week range (assuming 4 weeks per month, ~7 days each)
+    const startDay = (weekNumber - 1) * 7 + 1;
+    const endDay = Math.min(weekNumber * 7, new Date(year, month + 1, 0).getDate());
+    
+    // Update display
+    const dateElement = document.getElementById('selectedDate');
+    const monthName = now.toLocaleDateString('en-US', { month: 'long' });
+    dateElement.textContent = `Week ${weekNumber} (${monthName} ${startDay}-${endDay}, ${year})`;
+    
+    // Clear date input
+    document.getElementById('reportDate').value = '';
+    
+    updateDailyReportByWeek(weekNumber, year, month);
+}
+
+// Filter by week from select dropdown
+function filterByWeekSelect() {
+    const weekSelect = document.getElementById('weekFilter');
+    const weekSelectModal = document.getElementById('weekFilterModal');
+    const weekNumber = parseInt(weekSelect?.value || weekSelectModal?.value);
+    
+    if (weekNumber) {
+        // Get selected month and year from calendar input
+        const monthYearSelect = document.getElementById('monthYearSelect');
+        const selectedValue = monthYearSelect.value; // Format: "2026-03"
+        
+        if (!selectedValue) return;
+        
+        const [selectedYear, selectedMonthStr] = selectedValue.split('-');
+        const selectedMonth = parseInt(selectedMonthStr) - 1; // Convert to 0-based month
+        const year = parseInt(selectedYear);
+        
+        // Calculate week range
+        const startDay = (weekNumber - 1) * 7 + 1;
+        const endDay = Math.min(weekNumber * 7, new Date(year, selectedMonth + 1, 0).getDate());
+        
+        // Update display
+        const dateElement = document.getElementById('selectedDateModal');
+        if (dateElement) {
+            const date = new Date(year, selectedMonth);
+            const monthName = date.toLocaleDateString('en-US', { month: 'long' });
+            dateElement.textContent = `Week ${weekNumber} (${monthName} ${startDay}-${endDay}, ${year})`;
+        }
+        
+        updateWeeklyReportWithFilter(selectedMonth, year, weekNumber);
+    } else {
+        // Show all for selected month/year if no week selected
+        updateWeeklyReportByMonthYear();
+    }
+}
+
+// Toggle Daily Report visibility
+function toggleDailyReport() {
+    const content = document.getElementById('dailyReportContent');
+    const icon = document.getElementById('toggleReportIcon');
+    const btn = document.getElementById('toggleReportBtn');
+    const dateDisplay = document.getElementById('selectedDate').parentElement;
+    
+    if (content.style.display === 'none') {
+        content.style.display = 'block';
+        dateDisplay.style.display = 'block';
+        icon.className = 'bi bi-dash-lg';
+        btn.title = 'Minimize';
+    } else {
+        content.style.display = 'none';
+        dateDisplay.style.display = 'none';
+        icon.className = 'bi bi-plus-lg';
+        btn.title = 'Maximize';
+    }
+}
+
+// Open Daily Report in modal (zoom view)
+function openReportModal() {
+    const modalTable = document.getElementById('modalDailyReportTable');
+    const mainTable = document.getElementById('dailyReportTable');
+    const selectedDate = document.getElementById('selectedDate').textContent;
+    const modalSelectedDate = document.getElementById('modalSelectedDate');
+    
+    // Copy table content
+    modalTable.innerHTML = mainTable.innerHTML;
+    modalSelectedDate.textContent = selectedDate;
+    
+    // Open modal
+    const modal = new bootstrap.Modal(document.getElementById('reportZoomModal'));
+    modal.show();
+}
+
+// Open Attendance Monitor in modal (zoom view)
+function openMonitorModal() {
+    const modalTableHead = document.getElementById('modalMonitorTableHead');
+    const modalTableBody = document.getElementById('modalMonitorTableBody');
+    const mainTableHead = document.querySelector('.dashboard-table thead');
+    const mainTableBody = document.getElementById('dashboardTable');
+    const companyName = document.getElementById('companyName').textContent;
+    const modalCompanyName = document.getElementById('modalCompanyName');
+    
+    // Copy table content
+    modalTableHead.innerHTML = mainTableHead.innerHTML;
+    modalTableBody.innerHTML = mainTableBody.innerHTML;
+    modalCompanyName.textContent = companyName;
+    
+    // Open modal
+    const modal = new bootstrap.Modal(document.getElementById('monitorZoomModal'));
+    modal.show();
+}
+
+// Update employee name datalist for autocomplete
+function updateEmployeeDatalist() {
+    const datalist = document.getElementById('employeeList');
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    const attendanceData = loadAttendanceData();
+    const today = getLocalISODate();
+    
+    // Filter employees by current department
+    const departmentEmployees = employees.filter(emp => emp.department === currentDepartment);
+    
+    // Get today's time in records (without timeout)
+    const todayTimeInRecords = attendanceData.filter(record => 
+        record.date === today && 
+        record.department === currentDepartment && 
+        record.timeIn && 
+        !record.timeOut
+    );
+    
+    // Clear and populate datalist
+    datalist.innerHTML = '';
+    
+    // Add employees with existing time in records first
+    todayTimeInRecords.forEach(record => {
+        const option = document.createElement('option');
+        option.value = record.name;
+        option.setAttribute('data-has-timein', 'true');
+        option.setAttribute('data-timein', record.timeIn);
+        option.setAttribute('data-status', record.status);
+        option.setAttribute('data-record-id', record.id);
+        datalist.appendChild(option);
+    });
+    
+    // Sort alphabetically
+    departmentEmployees.sort((a, b) => a.name.localeCompare(b.name));
+
+    // Add other employees
+    departmentEmployees.forEach(emp => {
+        // Skip if already has time in record today
+        const hasTimeIn = todayTimeInRecords.some(record => record.name === emp.name);
+        if (!hasTimeIn) {
+            const option = document.createElement('option');
+            option.value = emp.name;
+            datalist.appendChild(option);
+        }
+    });
+}
+
+// Filter by date
+function filterByDate() {
+    currentFilterMode = 'day';
+    currentWeek = null;
+    const dateInput = document.getElementById('reportDate');
+    currentFilterDate = dateInput.value;
+    
+    // Clear week select
+    document.getElementById('weekFilter').value = '';
+    
+    updateSelectedDateDisplay();
+    updateDailyReport();
+}
+
+// Update daily report by week
+function updateDailyReportByWeek(weekNumber, year, month) {
+    const tableBody = document.getElementById('dailyReportTable');
+    const attendanceData = loadAttendanceData();
+    
+    // Calculate week range
+    const startDay = (weekNumber - 1) * 7 + 1;
+    const endDay = Math.min(weekNumber * 7, new Date(year, month + 1, 0).getDate());
+    
+    // Filter records within the week range
+    const filteredRecords = attendanceData.filter(record => {
+        if (record.department !== currentDepartment) return false;
+        
+        const recordDate = new Date(record.date + 'T00:00:00');
+        const recordDay = recordDate.getDate();
+        const recordMonth = recordDate.getMonth();
+        const recordYear = recordDate.getFullYear();
+        
+        return recordYear === year && recordMonth === month && recordDay >= startDay && recordDay <= endDay;
+    });
+    
+    if (filteredRecords.length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="6" class="text-center text-muted py-4">
+                    <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                    No attendance records for selected week
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    tableBody.innerHTML = '';
+    filteredRecords.forEach(record => {
+        const safeId = parseInt(record.id, 10);
+        const isLate = record.status === 'Late';
+        const tr = document.createElement('tr');
+
+        const tdName = document.createElement('td');
+        tdName.textContent = record.name;
+
+        const tdStatus = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = `badge-status ${getStatusBadgeClass(record.status)}`;
+        badge.textContent = record.status;
+        tdStatus.appendChild(badge);
+
+        const tdTimeIn = document.createElement('td');
+        if (isLate) { tdTimeIn.className = 'text-warning fw-bold'; }
+        tdTimeIn.textContent = formatTime(record.timeIn);
+
+        const tdSched = document.createElement('td');
+        tdSched.textContent = record.scheduleTime || '-';
+
+        const tdDate = document.createElement('td');
+        tdDate.textContent = record.date;
+
+        const tdReason = document.createElement('td');
+        if (record.reason) {
+            const badge = document.createElement('span');
+            badge.className = 'badge bg-warning text-dark';
+            badge.textContent = record.reason;
+            tdReason.appendChild(badge);
+        } else {
+            tdReason.textContent = '-';
+        }
+
+        const tdActions = document.createElement('td');
+        tdActions.className = 'text-center';
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn btn-sm btn-outline-primary';
+        editBtn.title = 'Edit';
+        editBtn.innerHTML = '<i class="bi bi-pencil"></i>';
+        editBtn.addEventListener('click', () => editAttendanceRecord(safeId));
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-sm btn-outline-danger';
+        delBtn.title = 'Delete';
+        delBtn.innerHTML = '<i class="bi bi-trash"></i>';
+        delBtn.addEventListener('click', () => deleteAttendanceRecord(safeId));
+        tdActions.appendChild(editBtn);
+        tdActions.appendChild(delBtn);
+
+        tr.append(tdName, tdStatus, tdTimeIn, tdSched, tdDate, tdReason, tdActions);
+        tableBody.appendChild(tr);
+    });
+}
+
+// Filter by date
+function filterByDate() {
+    const dateInput = document.getElementById('reportDate');
+    currentFilterDate = dateInput.value;
+    updateSelectedDateDisplay();
+    updateDailyReport();
+}
+
+// Update selected date display
+function updateSelectedDateDisplay() {
+    const dateElement = document.getElementById('selectedDate');
+    const modalDateElement = document.getElementById('selectedDateModal');
+    
+    if (currentFilterDate) {
+        const date = new Date(currentFilterDate + 'T00:00:00');
+        const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+        const formattedDate = date.toLocaleDateString('en-US', options);
+        
+        if (dateElement) dateElement.textContent = formattedDate;
+        if (modalDateElement) modalDateElement.textContent = formattedDate;
+    }
+}
+
+function selectSchedNote(btn, groupId) {
+    document.querySelectorAll('#' + groupId + ' .sn-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+}
+
+const DAYS_OF_WEEK = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+function getDayCheckboxId(containerId, day) {
+    const prefix = containerId === 'specialDaysList' ? 'day' : 'editDay';
+    return prefix + day;
+}
+
+function addSpecialDayRow(containerId, data = {}) {
+    const container = document.getElementById(containerId);
+    const row = document.createElement('div');
+    row.className = 'd-flex align-items-center gap-2 mb-2 special-day-row';
+    row.innerHTML = `
+        <select class="form-select form-select-sm" style="width:90px" aria-label="Day">
+            ${DAYS_OF_WEEK.map(d => `<option value="${d}" ${data.day === d ? 'selected' : ''}>${d}</option>`).join('')}
+        </select>
+        <input type="time" class="form-control form-control-sm" style="width:110px" placeholder="Start" value="${data.start || ''}" aria-label="Start">
+        <input type="time" class="form-control form-control-sm" style="width:110px" placeholder="End" value="${data.end || ''}" aria-label="End">
+        <button type="button" class="btn btn-outline-danger btn-sm" title="Remove"><i class="bi bi-x"></i></button>
+    `;
+    container.appendChild(row);
+
+    const select = row.querySelector('select');
+    const removeBtn = row.querySelector('button');
+    const startInput = row.querySelectorAll('input[type="time"]')[0];
+    const endInput = row.querySelectorAll('input[type="time"]')[1];
+
+    startInput.addEventListener('change', function() {
+        if (this.value) {
+            const [h, m] = this.value.split(':');
+            const endHour = (parseInt(h) + 9) % 24;
+            endInput.value = `${endHour.toString().padStart(2, '0')}:${m}`;
+        }
+    });
+
+    // Auto-check the day in Weekly Days when selected
+    const syncCheck = (day) => {
+        const cb = document.getElementById(getDayCheckboxId(containerId, day));
+        if (cb) cb.checked = true;
+    };
+
+    // Check on initial load
+    if (data.day) syncCheck(data.day);
+    else syncCheck(select.value);
+
+    select.addEventListener('change', () => syncCheck(select.value));
+
+    removeBtn.addEventListener('click', () => row.remove());
+}
+
+function getSpecialDays(containerId) {
+    const rows = document.querySelectorAll('#' + containerId + ' .special-day-row');
+    const result = [];
+    rows.forEach(row => {
+        const [dayEl, startEl, endEl] = row.querySelectorAll('select, input[type="time"]');
+        if (dayEl.value && startEl.value && endEl.value) {
+            result.push({ day: dayEl.value, start: startEl.value, end: endEl.value });
+        }
+    });
+    return result;
+}
+
+function getScheduleForDate(employee, dateStr) {
+    if (!dateStr || !employee) return { start: employee.scheduleStart, end: employee.scheduleEnd };
+    const dayName = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+    // dayName is like "Mon", "Tue", etc.
+    const special = (employee.specialDays || []).find(s => s.day === dayName);
+    if (special) return { start: special.start, end: special.end };
+    return { start: employee.scheduleStart, end: employee.scheduleEnd };
+}
+
+// Save new employee
+function saveEmployee() {
+    const name = document.getElementById('newEmployeeName').value;
+    const scheduleStart = document.getElementById('scheduleStart').value;
+    const scheduleEnd = document.getElementById('scheduleEnd').value;
+    const scheduleNotes = document.querySelector('#snBtnGroup .sn-btn.active')?.dataset.value || '';
+    
+    // Get selected days
+    const days = [];
+    ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach(day => {
+        const checkbox = document.getElementById('day' + day);
+        if (checkbox.checked) {
+            days.push(day);
+        }
+    });
+    
+    if (!name || !scheduleStart || !scheduleEnd || days.length === 0) {
+        showNotification('Please fill all fields and select at least one day', 'warning');
+        return;
+    }
+    
+    // Format time
+    const formatTime = (time) => {
+        const [hours, minutes] = time.split(':');
+        const hour = parseInt(hours);
+        const ampm = hour >= 12 ? 'PM' : 'AM';
+        const displayHour = hour % 12 || 12;
+        return `${displayHour}:${minutes} ${ampm}`;
+    };
+    
+    const scheduleDisplay = `${formatTime(scheduleStart)} - ${formatTime(scheduleEnd)}`;
+    const weeklyDays = days.join(', ');
+    const specialDays = getSpecialDays('specialDaysList');
+    
+    // Save to storage
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    employees.push({
+        id: Date.now(),
+        name: name,
+        scheduleStart: scheduleStart,
+        scheduleEnd: scheduleEnd,
+        scheduleDisplay: scheduleDisplay,
+        scheduleNotes: scheduleNotes,
+        weeklyDays: weeklyDays,
+        specialDays: specialDays,
+        department: currentDepartment
+    });
+    storage.setItem('employees', JSON.stringify(employees));
+    
+    // Close modal and reset form
+    document.activeElement?.blur();
+    const modal = bootstrap.Modal.getInstance(document.getElementById('addEmployeeModal'));
+    modal.hide();
+    document.getElementById('addEmployeeForm').reset();
+    document.getElementById('specialDaysList').innerHTML = '';
+    document.querySelectorAll('#snBtnGroup .sn-btn').forEach((b,i) => b.classList.toggle('active', i===0));
+    
+    // Update dashboard
+    updateDashboard();
+    showNotification('Employee added successfully!', 'success');
+    
+    // Sync to Google Sheets
+    syncDashboardToSheets();
+    syncFullState();
+}
+
+// Current department
+let currentDepartment = 'rv';
+
+// Switch department
+function switchDepartment(dept) {
+    currentDepartment = dept;
+    sessionStorage.setItem('activeDepartment', dept);
+    
+    // Update button states
+    const rvTab = document.getElementById('rvTab');
+    const comsTab = document.getElementById('comsTab');
+    const body = document.body;
+    
+    const dot = document.getElementById('deptDot');
+    if (dept === 'rv') {
+        rvTab.classList.add('active');
+        rvTab.classList.remove('btn-outline-primary');
+        rvTab.classList.add('btn-primary');
+        comsTab.classList.remove('active');
+        comsTab.classList.add('btn-outline-primary');
+        comsTab.classList.remove('btn-primary');
+        document.getElementById('companyName').textContent = 'Red Victory Consumers Goods Trading';
+        body.classList.remove('coms-active');
+        body.classList.add('rv-active');
+        dot.classList.remove('text-danger');
+        dot.classList.add('text-success');
+    } else {
+        comsTab.classList.add('active');
+        comsTab.classList.remove('btn-outline-primary');
+        comsTab.classList.add('btn-primary');
+        rvTab.classList.remove('active');
+        rvTab.classList.add('btn-outline-primary');
+        rvTab.classList.remove('btn-primary');
+        document.getElementById('companyName').textContent = 'C. Operations Management Services';
+        body.classList.remove('rv-active');
+        body.classList.add('coms-active');
+        dot.classList.remove('text-success');
+        dot.classList.add('text-danger');
+    }
+    
+    // Clear attendance form on department switch
+    document.getElementById('attendanceForm').reset();
+    setDefaultDate();
+    document.getElementById('employeeName').removeAttribute('data-existing-record-id');
+    document.getElementById('employeeName').removeAttribute('data-early-out-record-id');
+    const timeInEl = document.getElementById('timeIn');
+    const timeOutEl = document.getElementById('timeOut');
+    timeInEl.value = '';
+    timeInEl.disabled = false;
+    timeOutEl.value = '';
+    timeOutEl.disabled = true;
+    timeOutEl.style.backgroundColor = '#e9ecef';
+    timeOutEl.style.cursor = 'not-allowed';
+    const statusEl = document.getElementById('attendanceStatus');
+    statusEl.disabled = false;
+    statusEl.style.backgroundColor = '';
+    statusEl.style.cursor = '';
+    const returnSection = document.getElementById('returnToWorkSection');
+    if (returnSection) returnSection.style.display = 'none';
+    document.getElementById('earlyOutBtn').style.display = 'inline-flex';
+    document.getElementById('returnWorkBtn').style.display = 'none';
+
+    // Update tables
+    updateDailyReport();
+    updateDashboard();
+
+    // Animate cards on department switch
+    document.querySelectorAll('.card').forEach(c => {
+        c.classList.remove('card-switch');
+        void c.offsetWidth;
+        c.classList.add('card-switch');
+    });
+
+    const weeklyModal = document.getElementById('weeklyReportModal');
+    if (weeklyModal && weeklyModal.classList.contains('show')) {
+        updateWeeklyReportByDate();
+    }
+}
+
+// Initialize date and time
+function updateDateTime() {
+    const now = new Date();
+    
+    // Update time
+    const timeElement = document.getElementById('currentTime');
+    const hours = now.getHours();
+    const minutes = now.getMinutes();
+    const seconds = now.getSeconds();
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const displayHours = hours % 12 || 12;
+    timeElement.textContent = `${displayHours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')} ${ampm}`;
+    
+    // Update date
+    const dateElement = document.getElementById('currentDate');
+    const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+    dateElement.textContent = now.toLocaleDateString('en-US', options);
+    
+    // Update current month for Daily Report
+    const monthElement = document.getElementById('currentMonth');
+    if (monthElement) {
+        const monthName = now.toLocaleDateString('en-US', { month: 'long' });
+        monthElement.textContent = monthName;
+    }
+}
+
+// Set default date to today
+function setDefaultDate() {
+    const dateInput = document.getElementById('attendanceDate');
+    if (!dateInput) return;
+    const today = getLocalISODate();
+    dateInput.value = today;
+}
+
+// Get status badge class
+function getStatusBadgeClass(status) {
+    const statusMap = {
+        'Present': 'status-present',
+        'Late': 'status-late',
+        'Absent': 'status-absent',
+        'Undertime': 'status-undertime',
+        'Overtime': 'status-overtime',
+        'AWOL': 'status-awol',
+        'Sick Leave': 'status-sick',
+        'Work From Home': 'status-wfh'
+    };
+    return statusMap[status] || 'status-present';
+}
+
+// Format time to AM/PM
+function formatTime(time) {
+    if (!time) return '-';
+    const [hours, minutes] = time.split(':');
+    const hour = parseInt(hours);
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    const displayHour = hour % 12 || 12;
+    return `${displayHour.toString().padStart(2, '0')}:${minutes} ${ampm}`;
+}
+
+// Load attendance data from storage
+function loadAttendanceData() {
+    const data = storage.getItem('attendanceData');
+    return data ? JSON.parse(data) : [];
+}
+
+// Get data by department
+function getDataByDepartment(data) {
+    return data.filter(record => record.department === currentDepartment);
+}
+
+// Save attendance data to storage
+function saveAttendanceData(data) {
+    // Deduplicate: per employee+date+department, keep only the record with the highest id
+    const seen = {};
+    const deduped = [];
+    // Sort by id ascending so the last one (highest id) wins
+    const sorted = [...data].sort((a, b) => a.id - b.id);
+    sorted.forEach(r => {
+        const key = `${r.name}|${r.date}|${r.department}`;
+        seen[key] = r;
+    });
+    data = Object.values(seen);
+    storage.setItem('attendanceData', JSON.stringify(data));
+}
+
+// Update daily report table
+function updateDailyReport() {
+    const tableBody = document.getElementById('dailyReportTable');
+    const modalTableBody = document.getElementById('dailyReportTableModal');
+    const attendanceData = loadAttendanceData();
+    
+    // Filter by selected date
+    const filteredRecords = attendanceData.filter(record => 
+        record.date === currentFilterDate && record.department === currentDepartment
+    );
+    
+    const tableHTML = filteredRecords.length === 0 ? `
+        <tr>
+            <td colspan="6" class="text-center text-muted py-4">
+                <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                No attendance records for selected date
+            </td>
+        </tr>
+    ` : filteredRecords.map(record => {
+        const isLate = record.status === 'Late';
+        const safeId = parseInt(record.id, 10);
+        return `
+        <tr>
+            <td>${record.name}</td>
+            <td><span class="badge-status ${getStatusBadgeClass(record.status)}">${record.status}</span></td>
+            <td class="${isLate ? 'text-warning fw-bold' : ''}">${formatTime(record.timeIn)}</td>
+            <td>${record.scheduleTime || '-'}</td>
+            <td>${record.date}</td>
+            <td>${record.reason ? `<span class="badge bg-warning text-dark">${record.reason}</span>` : '-'}</td>
+            <td class="text-center">
+                <button class="btn btn-sm btn-outline-primary" onclick="editAttendanceRecord(${safeId})" title="Edit"><i class="bi bi-pencil"></i></button>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteAttendanceRecord(${safeId})" title="Delete"><i class="bi bi-trash"></i></button>
+            </td>
+        </tr>
+    `}).join('');
+    
+    if (tableBody) tableBody.innerHTML = tableHTML;
+    if (modalTableBody) modalTableBody.innerHTML = tableHTML;
+}
+
+// Update weekly report with month/year filter
+function updateWeeklyReportWithFilter(selectedMonth = null, selectedYear = null, weekNumber = null) {
+    const modalTableBody = document.getElementById('weeklyReportTableModal');
+    if (!modalTableBody) return;
+    
+    const attendanceData = loadAttendanceData();
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    
+    // Use current month/year if not specified
+    if (selectedMonth === null || selectedYear === null) {
+        const now = new Date();
+        selectedMonth = selectedMonth !== null ? selectedMonth : now.getMonth();
+        selectedYear = selectedYear !== null ? selectedYear : now.getFullYear();
+    }
+    
+    // Filter by month, year, and optionally week
+    let filteredData = attendanceData.filter(record => {
+        if (record.department !== currentDepartment) return false;
+        
+        const recordDate = new Date(record.date + 'T00:00:00');
+        const recordMonth = recordDate.getMonth();
+        const recordYear = recordDate.getFullYear();
+        
+        // Check month and year
+        if (recordMonth !== selectedMonth || recordYear !== selectedYear) return false;
+        
+        // Check week if specified
+        if (weekNumber) {
+            const startDay = (weekNumber - 1) * 7 + 1;
+            const endDay = Math.min(weekNumber * 7, new Date(selectedYear, selectedMonth + 1, 0).getDate());
+            const recordDay = recordDate.getDate();
+            return recordDay >= startDay && recordDay <= endDay;
+        }
+        
+        return true;
+    });
+    
+    // Group by employee name
+    const employeeRecords = {};
+    
+    filteredData.forEach(record => {
+        if (!employeeRecords[record.name]) {
+            const employee = employees.find(e => e.name === record.name && e.department === currentDepartment);
+            employeeRecords[record.name] = {
+                name: record.name,
+                dates: [],
+                scheduleDisplay: employee ? employee.scheduleDisplay : 'Not Set',
+                totalHours: 0,
+                records: []
+            };
+        }
+        // Add date if not already in the list (exclude WFH from day count)
+        if (!employeeRecords[record.name].dates.includes(record.date) && record.status !== 'Work From Home') {
+            employeeRecords[record.name].dates.push(record.date);
+        }
+        employeeRecords[record.name].totalHours += parseFloat(record.totalHours || 0);
+        employeeRecords[record.name].records.push(record);
+    });
+    
+    if (Object.keys(employeeRecords).length === 0) {
+        modalTableBody.innerHTML = `
+            <tr>
+                <td colspan="5" class="text-center text-muted py-4">
+                    <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                    No attendance data available for selected period
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    modalTableBody.innerHTML = Object.values(employeeRecords).map(data => {
+        return `
+        <tr>
+            <td><strong>${data.name}</strong></td>
+            <td><span class="badge bg-info text-dark">${data.scheduleDisplay}</span></td>
+            <td class="text-center fw-bold text-primary">${data.totalHours.toFixed(2)} hrs</td>
+            <td class="text-center fw-bold text-success">${data.dates.length} day${data.dates.length !== 1 ? 's' : ''}</td>
+            <td class="text-center">
+                <button class="btn btn-sm btn-outline-info" onclick="viewEmployeeDetails('${data.name}')" title="View Details"><i class="bi bi-eye"></i></button>
+            </td>
+        </tr>
+    `}).join('');
+}
+
+// Update employee dashboard
+function updateDashboard() {
+    const tableBody = document.getElementById('dashboardTable');
+    const tableHead = document.querySelector('.dashboard-table thead tr');
+    const attendanceData = loadAttendanceData();
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    
+    // Update employee name datalist
+    updateEmployeeDatalist();
+    
+    // Update table headers based on department
+    if (currentDepartment === 'rv') {
+        tableHead.innerHTML = `
+            <th>Name</th>
+            <th class="text-center">Present</th>
+            <th class="text-center">Absent</th>
+            <th class="text-center">Late</th>
+            <th class="text-center">Total Lates (mins)</th>
+            <th class="text-center">Undertime</th>
+            <th class="text-center">Overtime</th>
+            <th class="text-center">AWOL</th>
+            <th class="text-center">Sick Leave / Vacation Leave</th>
+            <th class="text-center">WFH</th>
+            <th class="text-center">Sched Time</th>
+            <th class="text-center">Notes</th>
+            <th class="text-center">Actions</th>
+        `;
+    } else {
+        tableHead.innerHTML = `
+            <th>Name</th>
+            <th class="text-center">Present</th>
+            <th class="text-center">Absent</th>
+            <th class="text-center">Late</th>
+            <th class="text-center">Undertime</th>
+            <th class="text-center">AWOL</th>
+            <th class="text-center">Sick Leave / Vacation Leave</th>
+            <th class="text-center">WFH</th>
+            <th class="text-center">Sched Time</th>
+            <th class="text-center">Notes</th>
+            <th class="text-center">Actions</th>
+        `;
+    }
+    
+    // Group by employee - ONLY for employees that exist in the employees list
+    const employeeStats = {};
+    
+    // Sort employees alphabetically
+    employees.sort((a, b) => a.name.localeCompare(b.name));
+
+    // Initialize all saved employees with zero stats
+    employees.forEach(emp => {
+        if (emp.department === currentDepartment) {
+            employeeStats[emp.name] = {
+                present: 0,
+                absent: 0,
+                late: 0,
+                totalLates: 0,
+                undertime: 0,
+                overtime: 0,
+                awol: 0,
+                sickLeave: 0,
+                wfh: 0,
+                scheduleDisplay: emp.scheduleDisplay,
+                weeklyDays: emp.weeklyDays
+            };
+        }
+    });
+    
+    // Update stats from attendance records - ONLY for employees in the list AND current month only
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    
+    attendanceData.forEach(record => {
+        if (record.department !== currentDepartment) return;
+        
+        // Filter by current month and year
+        const recordDate = new Date(record.date + 'T00:00:00');
+        const recordMonth = recordDate.getMonth();
+        const recordYear = recordDate.getFullYear();
+        
+        // Only process current month data
+        if (recordMonth !== currentMonth || recordYear !== currentYear) return;
+        
+        // Only process if employee exists in employeeStats (i.e., in employees list)
+        if (employeeStats[record.name]) {
+            const stats = employeeStats[record.name];
+            
+            switch(record.status) {
+                case 'Present':
+                    stats.present++;
+                    break;
+                case 'Absent':
+                    stats.absent++;
+                    break;
+                case 'Late':
+                    stats.late++;
+                    stats.totalLates += record.lateMinutes || 15;
+                    break;
+                case 'Undertime':
+                    stats.undertime++;
+                    break;
+                case 'Overtime':
+                    stats.overtime++;
+                    break;
+                case 'AWOL':
+                    stats.awol++;
+                    break;
+                case 'Sick Leave':
+                    stats.sickLeave++;
+                    break;
+                case 'Work From Home':
+                    stats.wfh++;
+                    break;
+            }
+        }
+    });
+    
+    if (Object.keys(employeeStats).length === 0) {
+        const colspan = currentDepartment === 'rv' ? '12' : '10';
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="${colspan}" class="text-center text-muted py-4">
+                    <i class="bi bi-people fs-1 d-block mb-2"></i>
+                    No employee data available
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    tableBody.innerHTML = Object.entries(employeeStats).map(([name, stats]) => {
+        const employee = employees.find(e => e.name === name && e.department === currentDepartment);
+        const empId = employee ? employee.id : name;
+        
+        // Calculate habitual count (Absent + Late + Undertime)
+        const habitualCount = stats.absent + stats.late + stats.undertime;
+        
+        // Get policy colors
+        const awolColorClass = getAWOLPolicyColor(stats.awol);
+        const absentColorClass = getHabitualPolicyColor(habitualCount);
+        const lateColorClass = getHabitualPolicyColor(habitualCount);
+        const undertimeColorClass = getHabitualPolicyColor(habitualCount);
+        const empNotes = employee && employee.scheduleNotes ? employee.scheduleNotes.toUpperCase() : '';
+        const isFloat = empNotes.includes('FLOAT');
+        const schedDisplay = isFloat ? '-' : `<span class="badge bg-info text-dark">${stats.scheduleDisplay || 'Not Set'}</span>`;
+        
+        if (currentDepartment === 'rv') {
+            return `
+            <tr>
+                <td><strong>${name}</strong></td>
+                <td class="text-center text-present">${stats.present}</td>
+                <td class="text-center text-absent ${absentColorClass}">${stats.absent}</td>
+                <td class="text-center text-late ${lateColorClass}">${stats.late}</td>
+                <td class="text-center">${stats.totalLates}</td>
+                <td class="text-center text-undertime ${undertimeColorClass}">${stats.undertime}</td>
+                <td class="text-center text-overtime">${stats.overtime}</td>
+                <td class="text-center text-awol ${awolColorClass}">${stats.awol}</td>
+                <td class="text-center text-sick">${stats.sickLeave}</td>
+                <td class="text-center text-wfh">${stats.wfh}</td>
+                <td class="text-center">${schedDisplay}</td>
+                <td class="text-center">${employee && employee.scheduleNotes ? `<span class="badge bg-secondary">${employee.scheduleNotes}</span>` : '-'}</td>
+                <td class="text-center">
+                    <button class="btn btn-sm btn-outline-primary" onclick="openEditModal('${empId}')" title="Edit"><i class="bi bi-pencil"></i></button>
+                    <button class="btn btn-sm btn-outline-info" onclick="openScheduleModal('${empId}')" title="View Schedule"><i class="bi bi-calendar3"></i></button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete('${empId}')" title="Delete"><i class="bi bi-trash"></i></button>
+                </td>
+            </tr>
+        `;
+        } else {
+            return `
+            <tr>
+                <td><strong>${name}</strong></td>
+                <td class="text-center text-present">${stats.present}</td>
+                <td class="text-center text-absent ${absentColorClass}">${stats.absent}</td>
+                <td class="text-center text-late ${lateColorClass}">${stats.late}</td>
+                <td class="text-center text-undertime ${undertimeColorClass}">${stats.undertime}</td>
+                <td class="text-center text-awol ${awolColorClass}">${stats.awol}</td>
+                <td class="text-center text-sick">${stats.sickLeave}</td>
+                <td class="text-center text-wfh">${stats.wfh}</td>
+                <td class="text-center">${schedDisplay}</td>
+                <td class="text-center">${employee && employee.scheduleNotes ? `<span class="badge bg-secondary">${employee.scheduleNotes}</span>` : '-'}</td>
+                <td class="text-center">
+                    <button class="btn btn-sm btn-outline-primary" onclick="openEditModal('${empId}')" title="Edit"><i class="bi bi-pencil"></i></button>
+                    <button class="btn btn-sm btn-outline-info" onclick="openScheduleModal('${empId}')" title="View Schedule"><i class="bi bi-calendar3"></i></button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete('${empId}')" title="Delete"><i class="bi bi-trash"></i></button>
+                </td>
+            </tr>
+        `;
+        }
+    }).join('');
+}
+
+// Handle form submission
+document.getElementById('attendanceForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const name = document.getElementById('employeeName').value;
+    const date = document.getElementById('attendanceDate').value;
+    let status = document.getElementById('attendanceStatus').value;
+    let timeIn = document.getElementById('timeIn').value;
+    const timeOut = document.getElementById('timeOut').value;
+    const reason = document.getElementById('attendanceReason').value;
+    const existingRecordId = document.getElementById('employeeName').getAttribute('data-existing-record-id');
+    let lateMinutes = 0;
+    let scheduleTime = '';
+    let totalHours = 0;
+    
+    // Calculate total hours if both time in and time out are provided
+    if (timeIn && timeOut) {
+        const [inHours, inMinutes] = timeIn.split(':').map(Number);
+        const [outHours, outMinutes] = timeOut.split(':').map(Number);
+        
+        const inTotalMinutes = inHours * 60 + inMinutes;
+        let outTotalMinutes = outHours * 60 + outMinutes;
+        
+        // Handle overnight shift (e.g. time in 22:00, time out 06:00)
+        if (outTotalMinutes < inTotalMinutes) {
+            outTotalMinutes += 24 * 60;
+        }
+        
+        const diffMinutes = outTotalMinutes - inTotalMinutes;
+        totalHours = parseFloat((diffMinutes / 60).toFixed(2));
+    }
+    
+    // Get employee data
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    const employee = employees.find(e => e.name === name && e.department === currentDepartment);
+    
+    if (employee) {
+        const daySched = getScheduleForDate(employee, date);
+        const fmtT = t => { if (!t) return ''; const [h,m] = t.split(':'); const hr = parseInt(h); return `${(hr%12||12)}:${m} ${hr>=12?'PM':'AM'}`; };
+        const special = (employee.specialDays || []).find(s => s.day === new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' }));
+        scheduleTime = special ? `${fmtT(daySched.start)} - ${fmtT(daySched.end)}` : (employee.scheduleDisplay || '');
+    }
+
+    let attendanceData = loadAttendanceData();
+
+    // Auto-detect late if status is Present
+    // Skip late detection if employee already has a record today (returning from break)
+    const existingTodayRecord = attendanceData.find(r => 
+        r.name === name && r.date === date && r.department === currentDepartment
+    );
+
+    const notes = employee && employee.scheduleNotes ? employee.scheduleNotes.toUpperCase() : '';
+    const isFlex = notes.includes('FLEX') || notes.includes('FLOAT');
+
+    // If employee has FLEX schedule and the Time In field still shows schedule start,
+    // override with the actual current time so the recorded time matches when they submitted.
+    if (isFlex && employee && employee.scheduleStart) {
+        if (timeIn && timeIn === employee.scheduleStart) {
+            const now = new Date();
+            const hh = now.getHours().toString().padStart(2, '0');
+            const mm = now.getMinutes().toString().padStart(2, '0');
+            timeIn = `${hh}:${mm}`;
+        }
+    }
+
+    // Block FLOAT employees from submitting attendance
+    if (notes.includes('FLOAT') && !existingRecordId) {
+        showNotification(`${name} is on FLOAT schedule and is not required to log attendance.`, 'warning');
+        return;
+    }
+
+    if (status === 'Present' && timeIn && employee && employee.scheduleStart && !existingTodayRecord && !isFlex) {
+        const daySched = getScheduleForDate(employee, date);
+        const [schedHours, schedMins] = daySched.start.split(':').map(Number);
+        const [timeHours, timeMins] = timeIn.split(':').map(Number);
+        
+        const schedMinutes = schedHours * 60 + schedMins;
+        const timeMinutes = timeHours * 60 + timeMins;
+        lateMinutes = timeMinutes - schedMinutes;
+        
+        if (lateMinutes >= 11) {
+            status = 'Late';
+        } else {
+            lateMinutes = 0;
+        }
+    }
+    
+    // Auto-detect Overtime: if total hours > 9 and status is Present or Late
+    if (timeOut && totalHours > 9 && (status === 'Present' || status === 'Late')) {
+        status = 'Overtime';
+    }
+
+    // Calculate late minutes for manually selected Late status
+    if (status === 'Late' && timeIn && lateMinutes === 0 && employee && employee.scheduleStart && !isFlex) {
+        const daySched = getScheduleForDate(employee, date);
+        const [schedHours, schedMins] = daySched.start.split(':').map(Number);
+        const [timeHours, timeMins] = timeIn.split(':').map(Number);
+        
+        const schedMinutes = schedHours * 60 + schedMins;
+        const timeMinutes = timeHours * 60 + timeMins;
+        lateMinutes = Math.max(0, timeMinutes - schedMinutes);
+    }
+    
+    // Also check for any existing record on the same date (catches early-out re-submit)
+    if (!existingRecordId) {
+        const sameDay = attendanceData.find(r =>
+            r.name === name && r.date === date && r.department === currentDepartment
+        );
+        if (sameDay && status === 'Undertime') {
+            // Update the existing record instead of creating a duplicate
+            const idx = attendanceData.indexOf(sameDay);
+            attendanceData[idx].timeOut    = timeOut;
+            attendanceData[idx].totalHours = totalHours;
+            attendanceData[idx].status     = 'Undertime';
+            if (reason) attendanceData[idx].reason = reason;
+            saveAttendanceData(attendanceData);
+            this.reset();
+            setDefaultDate();
+            document.getElementById('employeeName').removeAttribute('data-existing-record-id');
+            updateDailyReport();
+            updateWeeklyReportWithFilter();
+            updateDashboard();
+            updateEmployeeDatalist();
+            syncDashboardToSheets();
+            syncWeeklyReportToSheets();
+            showNotification('Attendance recorded successfully!', 'success');
+            return;
+        }
+    }
+
+    if (existingRecordId) {
+        const recordIndex = attendanceData.findIndex(r => r.id == existingRecordId);
+        if (recordIndex !== -1) {
+            const existingRecord = attendanceData[recordIndex];
+
+            // If employee returned from early out, calculate session 1 + session 2 hours
+            if (existingRecord.returnTimeIn && timeOut) {
+                const [s2InH, s2InM]   = existingRecord.returnTimeIn.split(':').map(Number);
+                const [s2OutH, s2OutM] = timeOut.split(':').map(Number);
+                let s2In  = s2InH * 60 + s2InM;
+                let s2Out = s2OutH * 60 + s2OutM;
+                if (s2Out < s2In) s2Out += 24 * 60;
+                const session2Hours = parseFloat(((s2Out - s2In) / 60).toFixed(2));
+                const session1Hours = parseFloat(existingRecord.session1Hours || 0);
+                totalHours = parseFloat((session1Hours + session2Hours).toFixed(2));
+
+                // Restore original status (not Undertime anymore)
+                status = existingRecord.previousStatus || existingRecord.status || 'Present';
+
+                attendanceData[recordIndex] = {
+                    ...existingRecord,
+                    timeOut:      timeOut,
+                    totalHours:   totalHours,
+                    status:       status
+                };
+            } else {
+                attendanceData[recordIndex].timeOut    = timeOut;
+                attendanceData[recordIndex].totalHours = totalHours;
+                if (reason) attendanceData[recordIndex].reason = reason;
+                // If early out was used, override status to Undertime
+                if (status === 'Undertime') attendanceData[recordIndex].status = 'Undertime';
+                // If total hours > 9, override status to Overtime
+                else if (totalHours > 9 && (attendanceData[recordIndex].status === 'Present' || attendanceData[recordIndex].status === 'Late')) {
+                    attendanceData[recordIndex].status = 'Overtime';
+                }
+            }
+        }
+        showNotification('Attendance recorded successfully!', 'success');
+    } else {
+        const newRecord = {
+            id: Date.now(),
+            name: name,
+            date: date,
+            status: status,
+            timeIn: timeIn,
+            timeOut: timeOut,
+            totalHours: totalHours,
+            scheduleTime: scheduleTime,
+            lateMinutes: lateMinutes,
+            reason: reason,
+            department: currentDepartment
+        };
+        attendanceData.push(newRecord);
+        showNotification('Attendance recorded successfully!', 'success');
+    }
+    
+    saveAttendanceData(attendanceData);
+    
+    // Reset form
+    this.reset();
+    setDefaultDate();
+    document.getElementById('employeeName').removeAttribute('data-existing-record-id');
+    document.getElementById('employeeName').removeAttribute('data-early-out-record-id');
+    document.getElementById('earlyOutBtn').style.display = 'inline-flex';
+    document.getElementById('returnWorkBtn').style.display = 'none';
+    // Re-lock timeout, unlock status
+    const toField = document.getElementById('timeOut');
+    toField.disabled = true;
+    toField.style.backgroundColor = '#e9ecef';
+    toField.style.cursor = 'not-allowed';
+    const statusField = document.getElementById('attendanceStatus');
+    statusField.disabled = false;
+    statusField.style.backgroundColor = '';
+    statusField.style.cursor = '';
+    const submitBtn = document.querySelector('#attendanceForm button[type="submit"]');
+    submitBtn.disabled = false;
+    submitBtn.style.opacity = '1';
+    
+    // Update tables
+    updateDailyReport();
+    updateWeeklyReportWithFilter();
+    updateDashboard();
+    
+    // Update weekly report modal if it's open
+    const weeklyModal = document.getElementById('weeklyReportModal');
+    if (weeklyModal && weeklyModal.classList.contains('show')) {
+        // Get current month/year selection
+        const monthYearSelect = document.getElementById('monthYearSelect');
+        if (monthYearSelect && monthYearSelect.value) {
+            const [selectedYear, selectedMonthStr] = monthYearSelect.value.split('-');
+            const selectedMonth = parseInt(selectedMonthStr) - 1;
+            const year = parseInt(selectedYear);
+            
+            // Check if there's a week filter active
+            const weekFilter = document.getElementById('weekFilterModal');
+            const weekNumber = weekFilter ? parseInt(weekFilter.value) : null;
+            
+            if (weekNumber) {
+                updateWeeklyReportWithFilter(selectedMonth, year, weekNumber);
+            } else {
+                updateWeeklyReportWithFilter(selectedMonth, year);
+            }
+        }
+    }
+    
+    // Update employee datalist for autocomplete
+    updateEmployeeDatalist();
+    
+    // Sync to Google Sheets
+    syncDashboardToSheets();
+    syncWeeklyReportToSheets();
+    syncFullState();
+});
+
+// Show notification
+function showNotification(message, type) {
+    const notification = document.createElement('div');
+    notification.className = `alert alert-${type} position-fixed top-0 start-50 translate-middle-x mt-3`;
+    notification.style.zIndex = '9999';
+    notification.style.minWidth = '300px';
+    notification.innerHTML = `
+        <i class="bi bi-check-circle-fill me-2"></i>${message}
+    `;
+    
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.style.opacity = '0';
+        notification.style.transition = 'opacity 0.5s ease';
+        setTimeout(() => notification.remove(), 500);
+    }, 3000);
+}
+
+// Export data to CSV
+function exportData() {
+    const attendanceData = loadAttendanceData();
+    
+    if (attendanceData.length === 0) {
+        showNotification('No data to export', 'warning');
+        return;
+    }
+    
+    let csv = 'Name,Date,Status,Time In\n';
+    
+    attendanceData.forEach(record => {
+        csv += `${record.name},${record.date},${record.status},${formatTime(record.timeIn)}\n`;
+    });
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `attendance_report_${getLocalISODate()}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+    
+    showNotification('Data exported successfully!', 'success');
+}
+
+// Open edit employee modal
+function openEditModal(empId) {
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    const employee = employees.find(e => e.id == empId);
+    
+    if (!employee) return;
+    
+    document.getElementById('editEmployeeId').value = employee.id;
+    document.getElementById('editEmployeeName').value = employee.name;
+    document.getElementById('editScheduleStart').value = employee.scheduleStart;
+    document.getElementById('editScheduleEnd').value = employee.scheduleEnd;
+    const esnVal = employee.scheduleNotes || '';
+    document.querySelectorAll('#esnBtnGroup .sn-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.value === esnVal);
+    });
+    
+    // Set checkboxes
+    const days = employee.weeklyDays.split(', ');
+    ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach(day => {
+        const checkbox = document.getElementById('editDay' + day);
+        checkbox.checked = days.includes(day);
+    });
+
+    // Load special days
+    const editSpecialList = document.getElementById('editSpecialDaysList');
+    editSpecialList.innerHTML = '';
+    (employee.specialDays || []).forEach(sd => addSpecialDayRow('editSpecialDaysList', sd));
+    
+    const modal = new bootstrap.Modal(document.getElementById('editEmployeeModal'));
+    modal.show();
+}
+
+// Save edited employee
+function saveEditEmployee() {
+    const empId = document.getElementById('editEmployeeId').value;
+    const name = document.getElementById('editEmployeeName').value;
+    const scheduleStart = document.getElementById('editScheduleStart').value;
+    const scheduleEnd = document.getElementById('editScheduleEnd').value;
+    const scheduleNotes = document.querySelector('#esnBtnGroup .sn-btn.active')?.dataset.value || '';
+    
+    const days = [];
+    ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach(day => {
+        const checkbox = document.getElementById('editDay' + day);
+        if (checkbox.checked) days.push(day);
+    });
+    
+    if (!name || !scheduleStart || !scheduleEnd || days.length === 0) {
+        showNotification('Please fill all fields', 'warning');
+        return;
+    }
+    
+    const formatTime = (time) => {
+        const [hours, minutes] = time.split(':');
+        const hour = parseInt(hours);
+        const ampm = hour >= 12 ? 'PM' : 'AM';
+        const displayHour = hour % 12 || 12;
+        return `${displayHour}:${minutes} ${ampm}`;
+    };
+    
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    const index = employees.findIndex(e => e.id == empId);
+    
+    if (index !== -1) {
+        employees[index] = {
+            ...employees[index],
+            name: name,
+            scheduleStart: scheduleStart,
+            scheduleEnd: scheduleEnd,
+            scheduleDisplay: `${formatTime(scheduleStart)} - ${formatTime(scheduleEnd)}`,
+            scheduleNotes: scheduleNotes,
+            weeklyDays: days.join(', '),
+            specialDays: getSpecialDays('editSpecialDaysList')
+        };
+        storage.setItem('employees', JSON.stringify(employees));
+    }
+    
+    document.activeElement?.blur();
+    const modal = bootstrap.Modal.getInstance(document.getElementById('editEmployeeModal'));
+    modal.hide();
+    updateDashboard();
+    showNotification('Employee updated successfully!', 'success');
+    
+    // Sync to Google Sheets
+    syncDashboardToSheets();
+    syncFullState();
+}
+
+// Open schedule view modal
+function openScheduleModal(empId) {
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    const employee = employees.find(e => e.id == empId);
+    
+    if (!employee) return;
+    
+    document.getElementById('scheduleEmployeeName').textContent = employee.name;
+    document.getElementById('scheduleTime').textContent = employee.scheduleDisplay;
+    document.getElementById('scheduleDays').textContent = employee.weeklyDays;
+    
+    // Show special days
+    let specialSection = document.getElementById('scheduleSpecialDays');
+    if (!specialSection) {
+        specialSection = document.createElement('div');
+        specialSection.id = 'scheduleSpecialDays';
+        specialSection.className = 'mb-3';
+        document.getElementById('scheduleDays').parentElement.after(specialSection);
+    }
+    if (employee.specialDays && employee.specialDays.length > 0) {
+        const fmt = t => formatTime(t);
+        specialSection.innerHTML = `<label class="form-label fw-bold">Special Day Schedules</label><ul class="mb-0">${employee.specialDays.map(s => `<li><strong>${s.day}:</strong> ${fmt(s.start)} - ${fmt(s.end)}</li>`).join('')}</ul>`;
+        specialSection.style.display = '';
+    } else {
+        specialSection.style.display = 'none';
+    }
+    
+    // Show/hide schedule notes section
+    const notesSection = document.getElementById('scheduleNotesSection');
+    const notesDisplay = document.getElementById('scheduleNotesDisplay');
+    if (employee.scheduleNotes) {
+        notesDisplay.textContent = employee.scheduleNotes;
+        notesSection.classList.add('show');
+    } else {
+        notesSection.classList.remove('show');
+    }
+    
+    const modal = new bootstrap.Modal(document.getElementById('scheduleModal'));
+    modal.show();
+}
+
+// Confirm delete employee
+function confirmDelete(empId) {
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    const employee = employees.find(e => e.id == empId);
+    
+    if (!employee) return;
+    
+    document.getElementById('deleteEmployeeId').value = empId;
+    document.getElementById('deleteEmployeeName').textContent = employee.name;
+    
+    const modal = new bootstrap.Modal(document.getElementById('deleteModal'));
+    modal.show();
+}
+
+// Delete employee
+function deleteEmployee() {
+    const empId = document.getElementById('deleteEmployeeId').value;
+    let employees = JSON.parse(storage.getItem('employees') || '[]');
+    
+    // Get employee name and department before deleting
+    const employee = employees.find(e => e.id == empId);
+    const employeeName = employee ? employee.name : null;
+    const employeeDept = employee ? employee.department : null;
+    
+    // Delete employee from employees list
+    employees = employees.filter(e => e.id != empId);
+    storage.setItem('employees', JSON.stringify(employees));
+    
+    // Delete all attendance records for this employee in this department
+    if (employeeName && employeeDept) {
+        let attendanceData = loadAttendanceData();
+        attendanceData = attendanceData.filter(record => !(record.name === employeeName && record.department === employeeDept));
+        saveAttendanceData(attendanceData);
+        
+        // Force complete sync to Google Sheets
+        syncToGoogleSheets('forceSync', { 
+            employeeName: employeeName,
+            action: 'deleteEmployee'
+        });
+        syncToGoogleSheets('deleteEmployee', { employeeName: employeeName });
+    }
+    
+    document.activeElement?.blur();
+    const modal = bootstrap.Modal.getInstance(document.getElementById('deleteModal'));
+    modal.hide();
+    updateDashboard();
+    updateDailyReport();
+    
+    // Force sync dashboard and weekly report
+    syncDashboardToSheets();
+    syncWeeklyReportToSheets();
+    syncFullState();
+    
+    showNotification('Employee and all attendance records deleted successfully!', 'success');
+}
+
+// Edit attendance record
+function editAttendanceRecord(recordId) {
+    const attendanceData = loadAttendanceData();
+    const record = attendanceData.find(r => r.id === recordId);
+    
+    if (!record) return;
+    
+    // Populate form with record data
+    document.getElementById('employeeName').value = record.name;
+    document.getElementById('attendanceDate').value = record.date;
+    document.getElementById('attendanceStatus').value = record.status;
+    document.getElementById('timeIn').value = record.timeIn || '';
+    document.getElementById('timeOut').value = record.timeOut || '';
+    
+    // Delete the old record
+    deleteAttendanceRecord(recordId, true);
+    
+    // Close ALL open modals cleanly
+    document.querySelectorAll('.modal.show').forEach(m => {
+        const instance = bootstrap.Modal.getInstance(m);
+        if (instance) instance.hide();
+    });
+    // Remove any lingering backdrops and body class
+    setTimeout(() => {
+        document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+        document.body.classList.remove('modal-open');
+        document.body.style.removeProperty('overflow');
+        document.body.style.removeProperty('padding-right');
+        document.getElementById('attendanceForm').scrollIntoView({ behavior: 'smooth' });
+        showNotification('Edit the record and submit to update', 'info');
+    }, 300);
+}
+
+// Delete attendance record
+function deleteAttendanceRecord(recordId, silent = false) {
+    let attendanceData = loadAttendanceData();
+    const deletedRecord = attendanceData.find(record => record.id === recordId);
+    
+    attendanceData = attendanceData.filter(record => record.id !== recordId);
+    saveAttendanceData(attendanceData);
+    
+    updateDailyReport();
+    updateDashboard();
+    
+    // Auto-refresh weekly report if modal is open
+    const weeklyModal = document.getElementById('weeklyReportModal');
+    if (weeklyModal && weeklyModal.classList.contains('show')) {
+        // Get current filters and refresh
+        const monthYearSelect = document.getElementById('monthYearSelect');
+        const weekFilter = document.getElementById('weekFilterModal');
+        
+        if (monthYearSelect && monthYearSelect.value) {
+            const [selectedYear, selectedMonthStr] = monthYearSelect.value.split('-');
+            const selectedMonth = parseInt(selectedMonthStr) - 1;
+            const year = parseInt(selectedYear);
+            const weekNumber = weekFilter ? parseInt(weekFilter.value) : null;
+            
+            if (weekNumber) {
+                updateWeeklyReportWithFilter(selectedMonth, year, weekNumber);
+            } else {
+                updateWeeklyReportWithFilter(selectedMonth, year);
+            }
+        } else {
+            // Use current date filters
+            const reportDatePicker = document.getElementById('reportDatePicker');
+            const weekNumberInput = document.getElementById('weekNumberInput');
+            
+            if (reportDatePicker && reportDatePicker.value) {
+                updateWeeklyReportByDate();
+            } else if (weekNumberInput && weekNumberInput.value) {
+                updateWeeklyReportByWeek();
+            } else {
+                updateWeeklyReportWithFilter();
+            }
+        }
+    }
+    
+    // Auto-refresh employee details modal if open
+    const employeeModal = document.getElementById('employeeDetailsModal');
+    if (employeeModal && employeeModal.classList.contains('show') && deletedRecord) {
+        // Close current modal and reopen with updated data
+        const modal = bootstrap.Modal.getInstance(employeeModal);
+        if (modal) {
+            modal.hide();
+            // Small delay to ensure modal is closed before reopening
+            setTimeout(() => {
+                viewEmployeeDetails(deletedRecord.name);
+            }, 300);
+        }
+    }
+    
+    // Force complete sync to Google Sheets after deletion
+    if (deletedRecord) {
+        syncToGoogleSheets('forceSync', { 
+            employeeName: deletedRecord.name,
+            deletedDate: deletedRecord.date,
+            action: 'deleteRecord'
+        });
+    }
+    syncDashboardToSheets();
+    syncWeeklyReportToSheets();
+    
+    if (!silent) {
+        showNotification('Attendance record deleted successfully!', 'success');
+    }
+}
+
+// View employee attendance details
+function viewEmployeeDetails(employeeName) {
+    const attendanceData = loadAttendanceData();
+    
+    // Get selected date or week from the new filters
+    const reportDatePicker = document.getElementById('reportDatePicker');
+    const weekNumberInput = document.getElementById('weekNumberInput');
+    
+    let filteredRecords = [];
+    let periodText = '';
+    
+    if (reportDatePicker && reportDatePicker.value) {
+        // Filter by selected date
+        const selectedDate = reportDatePicker.value;
+        filteredRecords = attendanceData.filter(r => {
+            return r.name === employeeName && r.department === currentDepartment && r.date === selectedDate;
+        });
+        
+        const date = new Date(selectedDate + 'T00:00:00');
+        const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+        periodText = date.toLocaleDateString('en-US', options);
+        
+    } else if (weekNumberInput && weekNumberInput.value) {
+        // Filter by selected week
+        const weekNumber = parseInt(weekNumberInput.value);
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        
+        // Calculate week range
+        const startDay = (weekNumber - 1) * 7 + 1;
+        const endDay = Math.min(weekNumber * 7, new Date(year, month + 1, 0).getDate());
+        
+        filteredRecords = attendanceData.filter(r => {
+            if (r.name !== employeeName || r.department !== currentDepartment) return false;
+            
+            const recordDate = new Date(r.date + 'T00:00:00');
+            const recordDay = recordDate.getDate();
+            const recordMonth = recordDate.getMonth();
+            const recordYear = recordDate.getFullYear();
+            
+            return recordYear === year && recordMonth === month && recordDay >= startDay && recordDay <= endDay;
+        });
+        
+        const monthName = now.toLocaleDateString('en-US', { month: 'long' });
+        periodText = `Week ${weekNumber} (${monthName} ${startDay}-${endDay}, ${year})`;
+        
+    } else {
+        // No filter selected, show current month
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        
+        filteredRecords = attendanceData.filter(r => {
+            if (r.name !== employeeName || r.department !== currentDepartment) return false;
+            
+            const recordDate = new Date(r.date + 'T00:00:00');
+            return recordDate.getMonth() === month && recordDate.getFullYear() === year;
+        });
+        
+        const monthName = now.toLocaleDateString('en-US', { month: 'long' });
+        periodText = `${monthName} ${year}`;
+    }
+    
+    if (filteredRecords.length === 0) {
+        showNotification(`No attendance records found for ${employeeName} in ${periodText}`, 'info');
+        return;
+    }
+    
+    // Sort by date descending, then by id descending (latest record per date wins)
+    filteredRecords.sort((a, b) => new Date(b.date) - new Date(a.date) || b.id - a.id);
+
+    // Deduplicate: keep only the first (latest id) record per date
+    const seenDates = new Set();
+    filteredRecords = filteredRecords.filter(r => {
+        if (seenDates.has(r.date)) return false;
+        seenDates.add(r.date);
+        return true;
+    });
+
+    // Remove existing modal if any
+    const existingModal = document.getElementById('employeeDetailsModal');
+    if (existingModal) existingModal.remove();
+
+    // Build modal using DOM to avoid injection
+    const modalDiv = document.createElement('div');
+    modalDiv.className = 'modal fade';
+    modalDiv.id = 'employeeDetailsModal';
+    modalDiv.tabIndex = -1;
+    modalDiv.innerHTML = `
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 class="modal-title"><i class="bi bi-person-circle me-2"></i><span id="detailsModalName"></span></h5>
+                        <p class="text-muted mb-0" style="font-size: 0.9rem;" id="detailsModalPeriod"></p>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <table class="table table-hover table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Date</th><th>Status</th><th>Time In</th>
+                                <th>Time Out</th><th>Total Hours</th>
+                                <th class="text-center">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="detailsModalBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modalDiv);
+
+    // Blur focused element on hide to prevent aria-hidden focus conflict
+    modalDiv.addEventListener('hide.bs.modal', function() {
+        if (document.activeElement && modalDiv.contains(document.activeElement)) {
+            document.activeElement.blur();
+        }
+    });
+
+    // Set text safely via textContent
+    document.getElementById('detailsModalName').textContent = `${employeeName} - Attendance Details`;
+    document.getElementById('detailsModalPeriod').textContent = periodText;
+
+    // Build rows via DOM
+    const tbody = document.getElementById('detailsModalBody');
+    filteredRecords.forEach(r => {
+        const safeRId = parseInt(r.id, 10);
+        const recordDate = new Date(r.date + 'T00:00:00');
+        const formattedDate = recordDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+        const tr = document.createElement('tr');
+
+        const tdDate = document.createElement('td');
+        tdDate.textContent = formattedDate;
+
+        const tdStatus = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = `badge-status ${getStatusBadgeClass(r.status)}`;
+        badge.textContent = r.status;
+        tdStatus.appendChild(badge);
+
+        const tdIn = document.createElement('td');
+        tdIn.textContent = formatTime(r.timeIn);
+
+        const tdOut = document.createElement('td');
+        tdOut.textContent = formatTime(r.timeOut);
+
+        const tdHours = document.createElement('td');
+        tdHours.className = 'fw-bold';
+        tdHours.textContent = `${r.totalHours || 0} hrs`;
+
+        const tdActions = document.createElement('td');
+        tdActions.className = 'text-center';
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn btn-sm btn-outline-primary';
+        editBtn.title = 'Edit';
+        editBtn.innerHTML = '<i class="bi bi-pencil"></i>';
+        editBtn.addEventListener('click', () => editAttendanceRecord(safeRId));
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-sm btn-outline-danger';
+        delBtn.title = 'Delete';
+        delBtn.innerHTML = '<i class="bi bi-trash"></i>';
+        delBtn.addEventListener('click', () => deleteAttendanceRecord(safeRId));
+
+        tdActions.appendChild(editBtn);
+
+        // Show reason button if record has any reason (Early Out, etc.)
+        const reasonText = r.reason || r.attendanceReason || '';
+        if (reasonText) {
+            const reasonBtn = document.createElement('button');
+            reasonBtn.className = 'btn btn-sm btn-outline-warning ms-1';
+            reasonBtn.title = 'View Reason';
+            reasonBtn.innerHTML = '<i class="bi bi-chat-left-text"></i>';
+            reasonBtn.addEventListener('click', () => showReasonModal(reasonText, formattedDate));
+            tdActions.appendChild(reasonBtn);
+        }
+
+        tdActions.appendChild(delBtn);
+
+        tr.append(tdDate, tdStatus, tdIn, tdOut, tdHours, tdActions);
+        tbody.appendChild(tr);
+    });
+
+    const modal = new bootstrap.Modal(modalDiv);
+    modal.show();
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', async function() {
+    updateDateTime();
+    setInterval(updateDateTime, 1000); // Update every second
+    setDefaultDate();
+
+    // Always sync from Google Sheets on load so all devices stay up to date
+    showNotification('Syncing data from server...', 'info');
+    const loaded = await loadFromSheets();
+    if (loaded) showNotification('Data synced from server!', 'success');
+    
+    updateDailyReport();
+    updateWeeklyReportWithFilter();
+    updateDashboard();
+    
+    // Set initial RV theme
+    document.body.classList.add('rv-active');
+
+    // Blur focus on any modal hide to prevent aria-hidden focus conflict
+    document.querySelectorAll('.modal').forEach(modalEl => {
+        modalEl.addEventListener('hide.bs.modal', function() {
+            if (document.activeElement && this.contains(document.activeElement)) {
+                document.activeElement.blur();
+            }
+        });
+    });
+
+    // Restore department state after refresh
+    const savedDept = sessionStorage.getItem('activeDepartment');
+    if (savedDept && savedDept !== 'rv') {
+        switchDepartment(savedDept);
+    }
+
+    // Restore admin panel state after refresh
+    if (sessionStorage.getItem('adminPanelOpen') === '1') {
+        openAdminPanel();
+    }
+    
+    // Auto-calculate end time when start time changes
+    const scheduleStartInput = document.getElementById('scheduleStart');
+    const scheduleEndInput = document.getElementById('scheduleEnd');
+    
+    if (scheduleStartInput && scheduleEndInput) {
+        scheduleStartInput.addEventListener('change', function() {
+            if (this.value) {
+                const [hours, minutes] = this.value.split(':');
+                const startHour = parseInt(hours);
+                const notesVal = (document.querySelector('#snBtnGroup .sn-btn.active')?.dataset.value || '').toUpperCase();
+                const hoursToAdd = notesVal.includes('OT') ? 10 : 9;
+                const endHour = (startHour + hoursToAdd) % 24;
+                scheduleEndInput.value = `${endHour.toString().padStart(2, '0')}:${minutes}`;
+            }
+        });
+    }
+    
+    // Auto-capture current time for Time In field
+    const timeInInput = document.getElementById('timeIn');
+    if (timeInInput) {
+        // Make time input readonly and remove picker
+        timeInInput.type = 'text';
+        timeInInput.readOnly = true;
+        timeInInput.style.backgroundColor = '#f8f9fa';
+        timeInInput.style.cursor = 'not-allowed';
+        timeInInput.placeholder = '';
+        
+        timeInInput.addEventListener('focus', function() {
+            // Only auto-fill if field is empty
+            if (!this.value) {
+                const now = new Date();
+                const hours = now.getHours().toString().padStart(2, '0');
+                const minutes = now.getMinutes().toString().padStart(2, '0');
+                this.value = `${hours}:${minutes}`;
+                
+                showNotification('Time automatically captured and locked for security', 'info');
+            }
+        });
+        
+
+    }
+    
+    // Setup Time Out field — disabled by default until employee has existing Time In record
+    const timeOutInitial = document.getElementById('timeOut');
+    timeOutInitial.disabled = true;
+    timeOutInitial.style.backgroundColor = '#e9ecef';
+    timeOutInitial.style.cursor = 'not-allowed';
+
+    // Setup Time Out field
+    addManualTimeoutButton();
+
+    // Add employee name change listener for emergency timeout
+    addEmployeeNameListener();
+
+    // Disable Time In when status is Absent, but never enable Time Out from here
+    const statusSelect = document.getElementById('attendanceStatus');
+    const timeInField = document.getElementById('timeIn');
+    const timeOutField = document.getElementById('timeOut');
+    statusSelect.addEventListener('change', function() {
+        const isAbsent = this.value === 'Absent';
+        if (isAbsent) {
+            timeInField.value = '';
+            timeInField.disabled = true;
+            timeInField.style.backgroundColor = '#e9ecef';
+            timeInField.style.cursor = 'not-allowed';
+        } else {
+            timeInField.disabled = false;
+            timeInField.style.backgroundColor = '#f8f9fa';
+            timeInField.style.cursor = 'not-allowed';
+        }
+        // Time Out is NEVER enabled from status change — only enabled when existing record found
+    });
+    
+    // Refresh weekly report when modal opens to always show current department
+    const weeklyReportModal = document.getElementById('weeklyReportModal');
+    if (weeklyReportModal) {
+        weeklyReportModal.addEventListener('show.bs.modal', function() {
+            const now = new Date();
+            const day = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+            const monday = new Date(now);
+            monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+            const friday = new Date(monday);
+            friday.setDate(monday.getDate() + 4);
+            
+            const toISO = d => d.toISOString().split('T')[0];
+            const weekStart = toISO(monday);
+            const weekEnd = toISO(friday);
+            
+            const reportDatePicker = document.getElementById('reportDatePicker');
+            if (reportDatePicker) reportDatePicker.value = '';
+            document.getElementById('weekNumberInput').value = '';
+            
+            // Show current week data
+            updateWeeklyReportCurrentWeek(weekStart, weekEnd);
+            
+            const dateElement = document.getElementById('selectedDateModal');
+            if (dateElement) dateElement.textContent = '';
+        });
+    }
+});
+
+
+
+// Update weekly report for current week (Mon-Fri)
+function updateWeeklyReportCurrentWeek(weekStart, weekEnd) {
+    const modalTableBody = document.getElementById('weeklyReportTableModal');
+    if (!modalTableBody) return;
+    
+    const attendanceData = loadAttendanceData();
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    
+    const filteredData = attendanceData.filter(record => {
+        if (record.department !== currentDepartment) return false;
+        return record.date >= weekStart && record.date <= weekEnd;
+    });
+    
+    if (filteredData.length === 0) {
+        modalTableBody.innerHTML = `
+            <tr>
+                <td colspan="5" class="text-center text-muted py-5">
+                    <i class="bi bi-calendar-x fs-1 d-block mb-3 text-muted opacity-50"></i>
+                    <h6 class="text-muted">No Data This Week</h6>
+                    <p class="small mb-0">No attendance records for the current week</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    const employeeRecords = {};
+    filteredData.forEach(record => {
+        if (!employeeRecords[record.name]) {
+            const employee = employees.find(e => e.name === record.name && e.department === currentDepartment);
+            employeeRecords[record.name] = {
+                name: record.name,
+                scheduleDisplay: employee ? employee.scheduleDisplay : 'Not Set',
+                totalHours: 0,
+                totalDays: 0
+            };
+        }
+        employeeRecords[record.name].totalHours += parseFloat(record.totalHours || 0);
+        if (record.status !== 'Work From Home') employeeRecords[record.name].totalDays++;
+    });
+    
+    modalTableBody.innerHTML = Object.values(employeeRecords).map(data => `
+        <tr>
+            <td><strong>${data.name}</strong></td>
+            <td class="text-center"><span class="badge bg-info text-dark">${data.scheduleDisplay}</span></td>
+            <td class="text-center fw-bold text-primary">${data.totalHours.toFixed(2)} hrs</td>
+            <td class="text-center fw-bold text-success">${data.totalDays} day${data.totalDays !== 1 ? 's' : ''}</td>
+            <td class="text-center">
+                <button class="btn btn-sm btn-outline-info" onclick="viewEmployeeDetails('${data.name}')" title="View Details"><i class="bi bi-eye"></i></button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// Update weekly report by selected date from date picker
+function updateWeeklyReportByDate() {
+    const datePicker = document.getElementById('reportDatePicker');
+    const selectedDate = datePicker.value;
+    
+    if (!selectedDate) {
+        clearWeeklyReportDisplay();
+        return;
+    }
+    
+    // Clear week number input when date is selected
+    document.getElementById('weekNumberInput').value = '';
+    
+    const date = new Date(selectedDate + 'T00:00:00');
+    const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+    const formattedDate = date.toLocaleDateString('en-US', options);
+    
+    // Update display
+    const dateElement = document.getElementById('selectedDateModal');
+    if (dateElement) {
+        dateElement.textContent = formattedDate;
+    }
+    
+    // Filter and display data for the selected date
+    updateWeeklyReportWithDateFilter(selectedDate);
+}
+
+// Update weekly report by week number input
+function updateWeeklyReportByWeek() {
+    const weekInput = document.getElementById('weekNumberInput');
+    const datePicker = document.getElementById('reportDatePicker');
+    const weekNumber = parseInt(weekInput.value);
+    
+    if (!weekNumber || weekNumber < 1 || weekNumber > 4) {
+        clearWeeklyReportDisplay();
+        return;
+    }
+    
+    // Get selected date or use current date
+    let selectedDate = datePicker.value;
+    let targetDate;
+    
+    if (selectedDate) {
+        targetDate = new Date(selectedDate + 'T00:00:00');
+    } else {
+        targetDate = new Date();
+    }
+    
+    const year = targetDate.getFullYear();
+    const month = targetDate.getMonth();
+    
+    // Calculate week range
+    const startDay = (weekNumber - 1) * 7 + 1;
+    const endDay = Math.min(weekNumber * 7, new Date(year, month + 1, 0).getDate());
+    
+    // Update display
+    const dateElement = document.getElementById('selectedDateModal');
+    const monthName = targetDate.toLocaleDateString('en-US', { month: 'long' });
+    if (dateElement) {
+        dateElement.textContent = `Week ${weekNumber} (${monthName} ${startDay}-${endDay}, ${year})`;
+    }
+    
+    // Filter and display data for the selected week
+    updateWeeklyReportWithWeekFilter(month, year, weekNumber);
+}
+
+// Clear weekly report filters
+function clearWeeklyFilters() {
+    document.getElementById('reportDatePicker').value = '';
+    document.getElementById('weekNumberInput').value = '';
+    clearWeeklyReportDisplay();
+}
+
+// Clear weekly report display
+function clearWeeklyReportDisplay() {
+    const dateElement = document.getElementById('selectedDateModal');
+    const tableBody = document.getElementById('weeklyReportTableModal');
+    
+    if (dateElement) {
+        dateElement.textContent = 'Select date or week to view report';
+    }
+    
+    if (tableBody) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="5" class="text-center text-muted py-5">
+                    <i class="bi bi-calendar-x fs-1 d-block mb-3 text-muted opacity-50"></i>
+                    <h6 class="text-muted">No Data Available</h6>
+                    <p class="small mb-0">Please select a date or week number to view attendance data</p>
+                </td>
+            </tr>
+        `;
+    }
+}
+
+// Update weekly report with date filter
+function updateWeeklyReportWithDateFilter(selectedDate) {
+    const modalTableBody = document.getElementById('weeklyReportTableModal');
+    if (!modalTableBody) return;
+    
+    const attendanceData = loadAttendanceData();
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    
+    // Filter by selected date and current department
+    const filteredData = attendanceData.filter(record => {
+        return record.date === selectedDate && record.department === currentDepartment;
+    });
+    
+    // Group by employee name
+    const employeeRecords = {};
+    
+    filteredData.forEach(record => {
+        if (!employeeRecords[record.name]) {
+            const employee = employees.find(e => e.name === record.name && e.department === currentDepartment);
+            employeeRecords[record.name] = {
+                name: record.name,
+                scheduleDisplay: employee ? employee.scheduleDisplay : 'Not Set',
+                totalHours: 0,
+                totalDays: 0,
+                records: []
+            };
+        }
+        employeeRecords[record.name].totalHours += parseFloat(record.totalHours || 0);
+        if (record.status !== 'Work From Home') employeeRecords[record.name].totalDays++;
+        employeeRecords[record.name].records.push(record);
+    });
+    
+    if (Object.keys(employeeRecords).length === 0) {
+        modalTableBody.innerHTML = `
+            <tr>
+                <td colspan="5" class="text-center text-muted py-4">
+                    <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                    No attendance data available for selected date
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    modalTableBody.innerHTML = Object.values(employeeRecords).map(data => {
+        return `
+        <tr>
+            <td><strong>${data.name}</strong></td>
+            <td class="text-center"><span class="badge bg-info text-dark">${data.scheduleDisplay}</span></td>
+            <td class="text-center fw-bold text-primary">${data.totalHours.toFixed(2)} hrs</td>
+            <td class="text-center fw-bold text-success">${data.totalDays} day${data.totalDays !== 1 ? 's' : ''}</td>
+            <td class="text-center">
+                <button class="btn btn-sm btn-outline-info" onclick="viewEmployeeDetails('${data.name}')" title="View Details">
+                    <i class="bi bi-eye"></i>
+                </button>
+            </td>
+        </tr>
+    `}).join('');
+}
+
+function addManualTimeoutButton() {
+    // Time Out is a plain manual input, nothing to setup
+}
+
+// Show reason modal
+function showReasonModal(reason, dateLabel) {
+    let modal = document.getElementById('reasonViewModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.className = 'modal fade';
+        modal.id = 'reasonViewModal';
+        modal.tabIndex = -1;
+        modal.innerHTML = `
+            <div class="modal-dialog modal-sm">
+                <div class="modal-content">
+                    <div class="modal-header bg-warning text-dark py-2">
+                        <h6 class="modal-title"><i class="bi bi-chat-left-text me-2"></i>Reason</h6>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="text-muted small mb-1" id="reasonModalDate"></p>
+                        <p class="mb-0" id="reasonModalText"></p>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        modal.addEventListener('hide.bs.modal', function() {
+            if (document.activeElement && modal.contains(document.activeElement)) {
+                document.activeElement.blur();
+            }
+        });
+    }
+    document.getElementById('reasonModalDate').textContent = dateLabel || '';
+    document.getElementById('reasonModalText').textContent = reason;
+    const existing = bootstrap.Modal.getInstance(modal);
+    if (existing) existing.dispose();
+    new bootstrap.Modal(modal).show();
+}
+
+// Open Early Out modal
+function openEarlyOutModal() {
+    const now = new Date();
+    const hours = now.getHours().toString().padStart(2, '0');
+    const minutes = now.getMinutes().toString().padStart(2, '0');
+    document.getElementById('earlyOutTime').value = `${hours}:${minutes}`;
+    document.getElementById('earlyOutReason').value = '';
+    const modal = new bootstrap.Modal(document.getElementById('earlyOutModal'));
+    modal.show();
+}
+
+// Submit Early Out
+function submitEarlyOut() {
+    const time = document.getElementById('earlyOutTime').value;
+    const reason = document.getElementById('earlyOutReason').value.trim();
+
+    if (!time) {
+        showNotification('Please set a time out', 'warning');
+        return;
+    }
+
+    // Create or update a provisional attendance record immediately so
+    // Emergency Out pauses the working session and Return Work can resume it later.
+    const employeeNameInput = document.getElementById('employeeName');
+    const name = employeeNameInput.value?.trim();
+    const date = document.getElementById('attendanceDate').value || getLocalISODate();
+    if (!name) {
+        showNotification('Select an employee first', 'warning');
+        return;
+    }
+
+    const formattedTime = formatTime(time);
+    const reasonText = reason ? `${reason} (Emergency Out: ${formattedTime})` : `Emergency Out: ${formattedTime}`;
+
+    let attendanceData = loadAttendanceData();
+
+    // Find open record for this employee (has timeIn but no timeOut)
+    let record = attendanceData.find(r =>
+        r.name === name && r.date === date && r.department === currentDepartment && r.timeIn && !r.timeOut
+    );
+
+    // Helper to compute total hours between two HH:MM values
+    const computeHours = (inTime, outTime) => {
+        if (!inTime || !outTime) return 0;
+        const [inH, inM] = inTime.split(':').map(Number);
+        const [outH, outM] = outTime.split(':').map(Number);
+        let inTotal = inH * 60 + inM;
+        let outTotal = outH * 60 + outM;
+        if (outTotal < inTotal) outTotal += 24 * 60;
+        return parseFloat(((outTotal - inTotal) / 60).toFixed(2));
+    };
+
+    if (record) {
+        // update open record with provisional early out
+        record.timeOut = time;
+        record.totalHours = computeHours(record.timeIn, time);
+        // Save previous status so Return can restore it
+        if (!record.previousStatus) record.previousStatus = record.status || '';
+        record.status = 'Undertime';
+        record.reason = reasonText;
+        record.earlyOut = true;
+    } else {
+        // No open record — create provisional early-out record
+        const newRecord = {
+            id: Date.now(),
+            name: name,
+            date: date,
+            status: 'Undertime',
+            timeIn: '',
+            timeOut: time,
+            totalHours: 0,
+            scheduleTime: '',
+            lateMinutes: 0,
+            reason: reasonText,
+            department: currentDepartment,
+            earlyOut: true
+        };
+        attendanceData.push(newRecord);
+        record = newRecord;
+    }
+
+    saveAttendanceData(attendanceData);
+
+    // Set marker so Return to Work knows which record to update
+    employeeNameInput.setAttribute('data-early-out-record-id', record.id);
+
+    // Update UI: show return button, disable timeout editing
+    document.getElementById('earlyOutBtn').style.display = 'none';
+    document.getElementById('returnWorkBtn').style.display = 'inline-flex';
+    const toField = document.getElementById('timeOut');
+    if (toField) {
+        toField.value = time;
+        toField.disabled = true;
+        toField.style.backgroundColor = '#e9ecef';
+        toField.style.cursor = 'not-allowed';
+    }
+
+    document.activeElement?.blur();
+    const modal = bootstrap.Modal.getInstance(document.getElementById('earlyOutModal'));
+    if (modal) modal.hide();
+
+    // Refresh UI and sync
+    updateDailyReport();
+    updateDashboard();
+    updateEmployeeDatalist();
+    syncDashboardToSheets();
+    syncWeeklyReportToSheets();
+
+    showNotification('Emergency out recorded. Use Return when back to continue your shift.', 'info');
+}
+
+// Open Return to Work modal
+function openReturnToWorkModal() {
+    const now = new Date();
+    const hh = now.getHours().toString().padStart(2, '0');
+    const mm = now.getMinutes().toString().padStart(2, '0');
+    document.getElementById('returnTimeInInput').value = `${hh}:${mm}`;
+    new bootstrap.Modal(document.getElementById('returnToWorkModal')).show();
+}
+
+// Submit Return to Work
+function submitReturnToWork() {
+    const returnTime = document.getElementById('returnTimeInInput').value;
+    if (!returnTime) {
+        showNotification('Please set a return time', 'warning');
+        return;
+    }
+
+    const employeeNameInput = document.getElementById('employeeName');
+    const earlyOutRecordId = employeeNameInput.getAttribute('data-early-out-record-id');
+    if (!earlyOutRecordId) {
+        showNotification('No early-out record found', 'warning');
+        return;
+    }
+
+    let attendanceData = loadAttendanceData();
+    const idx = attendanceData.findIndex(r => r.id == earlyOutRecordId);
+    if (idx === -1) {
+        showNotification('Record not found', 'warning');
+        return;
+    }
+
+    // Reopen the record: clear timeOut so it shows as open (Time In only)
+    // Store session1 hours for later total calculation, set returnTimeIn for tracking
+    attendanceData[idx].session1Hours = parseFloat(attendanceData[idx].totalHours || 0);
+    attendanceData[idx].returnTimeIn = returnTime;
+    attendanceData[idx].timeOut = '';        // clear timeout — record is "open" again
+    attendanceData[idx].totalHours = 0;     // reset until final timeout
+    attendanceData[idx].earlyOut = false;
+    // Restore original status
+    if (attendanceData[idx].previousStatus) {
+        attendanceData[idx].status = attendanceData[idx].previousStatus;
+    }
+    saveAttendanceData(attendanceData);
+
+    document.activeElement?.blur();
+    bootstrap.Modal.getInstance(document.getElementById('returnToWorkModal')).hide();
+
+    // Fully reset the form — employee will come back and select their name to do Time Out
+    document.getElementById('attendanceForm').reset();
+    setDefaultDate();
+    employeeNameInput.removeAttribute('data-existing-record-id');
+    employeeNameInput.removeAttribute('data-early-out-record-id');
+    document.getElementById('earlyOutBtn').style.display = 'inline-flex';
+    document.getElementById('returnWorkBtn').style.display = 'none';
+    const toField = document.getElementById('timeOut');
+    toField.disabled = true;
+    toField.style.backgroundColor = '#e9ecef';
+    toField.style.cursor = 'not-allowed';
+    const statusField = document.getElementById('attendanceStatus');
+    statusField.disabled = false;
+    statusField.style.backgroundColor = '';
+    statusField.style.cursor = '';
+    const submitBtn = document.querySelector('#attendanceForm button[type="submit"]');
+    submitBtn.disabled = false;
+    submitBtn.style.opacity = '1';
+
+    updateDailyReport();
+    updateDashboard();
+    updateEmployeeDatalist();
+
+    showNotification(`Return time recorded at ${formatTime(returnTime)}. Select your name again to log Time Out.`, 'success');
+}
+
+// Add employee name change listener
+function addEmployeeNameListener() {
+    const employeeNameInput = document.getElementById('employeeName');
+    const dateInput = document.getElementById('attendanceDate');
+    const statusSelect = document.getElementById('attendanceStatus');
+    const timeInInput = document.getElementById('timeIn');
+    
+    if (!employeeNameInput) return;
+    
+    employeeNameInput.addEventListener('input', handleEmployeeNameChange);
+    employeeNameInput.addEventListener('change', handleEmployeeNameChange);
+    dateInput.addEventListener('change', handleEmployeeNameChange);
+
+    // If user is resuming after Return, enable submit only when final Time Out is entered
+    const timeOutInputGlobal = document.getElementById('timeOut');
+    if (timeOutInputGlobal) {
+        timeOutInputGlobal.addEventListener('input', function () {
+            const submitBtn = document.querySelector('#attendanceForm button[type="submit"]');
+            const employeeNameInput = document.getElementById('employeeName');
+            const existingId = employeeNameInput.getAttribute('data-existing-record-id');
+            if (existingId && this.value && submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.style.opacity = '1';
+            }
+        });
+    }
+
+    function handleEmployeeNameChange() {
+        const selectedName = employeeNameInput.value;
+        const employees = JSON.parse(storage.getItem('employees') || '[]');
+        const selectedEmployee = employees.find(e => e.name === selectedName && e.department === currentDepartment);
+        const attendanceData = loadAttendanceData();
+        const today = getLocalISODate();
+        const selectedDate = dateInput.value || today;
+        // Check for resumed session (Return confirmed) awaiting final Time Out
+        const resumedRecordId = employeeNameInput.getAttribute('data-existing-record-id');
+        if (resumedRecordId) {
+            const resumed = attendanceData.find(r => r.id == resumedRecordId);
+            if (resumed && resumed.returnTimeIn) {
+                // RESUMED MODE — user should enter final Time Out; keep submit disabled until they do
+                const timeOutInput = document.getElementById('timeOut');
+                const statusSelect = document.getElementById('attendanceStatus');
+                const timeInInput = document.getElementById('timeIn');
+                const submitBtn = document.querySelector('#attendanceForm button[type="submit"]');
+
+                statusSelect.value = resumed.status || '';
+                statusSelect.disabled = true;
+                statusSelect.style.backgroundColor = '#e9ecef';
+                statusSelect.style.cursor = 'not-allowed';
+
+                timeInInput.value = resumed.timeIn || '';
+                timeInInput.readOnly = true;
+                timeInInput.style.backgroundColor = '#f8f9fa';
+                timeInInput.style.cursor = 'not-allowed';
+
+                // Allow entering final Time Out but keep submit disabled until filled
+                timeOutInput.disabled = false;
+                timeOutInput.style.backgroundColor = '';
+                timeOutInput.style.cursor = '';
+                timeOutInput.value = '';
+
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.style.opacity = '0.6';
+                }
+
+                const earlyOutBtn = document.getElementById('earlyOutBtn');
+                const returnWorkBtn = document.getElementById('returnWorkBtn');
+                const returnSection = document.getElementById('returnToWorkSection');
+                if (earlyOutBtn) earlyOutBtn.style.display = 'inline-flex';
+                if (returnWorkBtn) returnWorkBtn.style.display = 'none';
+                if (returnSection) returnSection.style.display = 'none';
+
+                return; // handled
+            }
+        }
+        
+        // Check for existing record with no timeout (normal flow)
+        const existingRecord = attendanceData.find(record => 
+            record.name === selectedName && 
+            record.date === selectedDate && 
+            record.department === currentDepartment && 
+            record.timeIn && 
+            !record.timeOut
+        );
+
+        // Check for early-out record (has timeOut but marked as Undertime/Early Out)
+        const earlyOutRecord = attendanceData.find(record =>
+            record.name === selectedName &&
+            record.date === selectedDate &&
+            record.department === currentDepartment &&
+            record.timeIn &&
+            record.timeOut &&
+            ((record.reason || '').toLowerCase().includes('early out') || (record.reason || '').toLowerCase().includes('emergency out')) &&
+            !record.returnTimeIn
+        );
+        
+        const returnSection = document.getElementById('returnToWorkSection');
+
+        const earlyOutBtn = document.getElementById('earlyOutBtn');
+        const returnWorkBtn = document.getElementById('returnWorkBtn');
+        const timeOutInput = document.getElementById('timeOut');
+        const submitBtn = document.querySelector('#attendanceForm button[type="submit"]');
+
+        if (existingRecord) {
+            // TIME OUT MODE — status locked, timeout enabled, submit enabled
+            statusSelect.value = existingRecord.status;
+            statusSelect.disabled = true;
+            statusSelect.style.backgroundColor = '#e9ecef';
+            statusSelect.style.cursor = 'not-allowed';
+            timeInInput.value = existingRecord.timeIn;
+            timeInInput.readOnly = true;
+            timeInInput.style.backgroundColor = '#f8f9fa';
+            timeInInput.style.cursor = 'not-allowed';
+            timeOutInput.disabled = false;
+            timeOutInput.style.backgroundColor = '';
+            timeOutInput.style.cursor = '';
+            submitBtn.disabled = false;
+            submitBtn.style.opacity = '1';
+            employeeNameInput.setAttribute('data-existing-record-id', existingRecord.id);
+            employeeNameInput.removeAttribute('data-early-out-record-id');
+            if (earlyOutBtn) earlyOutBtn.style.display = 'inline-flex';
+            if (returnWorkBtn) returnWorkBtn.style.display = 'none';
+            if (returnSection) returnSection.style.display = 'none';
+            return; // handled
+        } else if (earlyOutRecord) {
+            // RETURN TO WORK MODE — status locked, show Return button
+            statusSelect.value = earlyOutRecord.status;
+            statusSelect.disabled = true;
+            statusSelect.style.backgroundColor = '#e9ecef';
+            statusSelect.style.cursor = 'not-allowed';
+            timeInInput.value = earlyOutRecord.timeIn;
+            timeInInput.readOnly = true;
+            timeInInput.style.backgroundColor = '#f8f9fa';
+            timeInInput.style.cursor = 'not-allowed';
+            timeOutInput.disabled = true;
+            timeOutInput.style.backgroundColor = '#e9ecef';
+            timeOutInput.style.cursor = 'not-allowed';
+            submitBtn.disabled = true;
+            submitBtn.style.opacity = '0.6';
+            employeeNameInput.setAttribute('data-early-out-record-id', earlyOutRecord.id);
+            employeeNameInput.removeAttribute('data-existing-record-id');
+            if (earlyOutBtn) earlyOutBtn.style.display = 'none';
+            if (returnWorkBtn) returnWorkBtn.style.display = 'inline-flex';
+            if (returnSection) returnSection.style.display = 'none';
+            return; // handled
+        } else {
+            // TIME IN MODE — status editable, timeout disabled, submit disabled
+            statusSelect.disabled = false;
+            statusSelect.style.backgroundColor = '';
+            statusSelect.style.cursor = '';
+                // If employee has FLEX in schedule notes, show schedule start time as display
+                if (selectedEmployee && (selectedEmployee.scheduleNotes || '').toUpperCase().includes('FLEX')) {
+                    timeInInput.value = selectedEmployee.scheduleStart || '';
+                    employeeNameInput.setAttribute('data-flex', '1');
+                } else {
+                    timeInInput.value = '';
+                    employeeNameInput.removeAttribute('data-flex');
+                }
+            timeInInput.readOnly = true;
+            timeInInput.style.backgroundColor = '#f8f9fa';
+            timeInInput.style.cursor = 'not-allowed';
+            timeOutInput.disabled = true;
+            timeOutInput.value = '';
+            timeOutInput.style.backgroundColor = '#e9ecef';
+            timeOutInput.style.cursor = 'not-allowed';
+            submitBtn.disabled = false;
+            submitBtn.style.opacity = '1';
+            employeeNameInput.removeAttribute('data-existing-record-id');
+            employeeNameInput.removeAttribute('data-early-out-record-id');
+            statusSelect.value = '';
+            if (earlyOutBtn) earlyOutBtn.style.display = 'inline-flex';
+            if (returnWorkBtn) returnWorkBtn.style.display = 'none';
+            if (returnSection) returnSection.style.display = 'none';
+        }
+    }
+}
+
+function openAdminPanel() {
+    document.getElementById('adminPanel').style.display = 'block';
+    document.getElementById('adminControls').style.display = 'flex';
+    document.getElementById('formCol').className = 'col-lg-3';
+    document.getElementById('mainRow').classList.add('admin-open');
+    const btn = document.getElementById('adminToggleBtn');
+    btn.innerHTML = '<i class="bi bi-x-lg"></i>';
+    btn.classList.remove('btn-outline-secondary');
+    btn.classList.add('btn-secondary');
+    sessionStorage.setItem('adminPanelOpen', '1');
+}
+
+function closeAdminPanel() {
+    document.getElementById('adminPanel').style.display = 'none';
+    document.getElementById('adminControls').style.display = 'none';
+    document.getElementById('formCol').className = 'col-lg-3';
+    document.getElementById('mainRow').classList.remove('admin-open');
+    const btn = document.getElementById('adminToggleBtn');
+    btn.innerHTML = '<i class="bi bi-shield-lock me-1"></i>Admin';
+    btn.classList.remove('btn-secondary');
+    btn.classList.add('btn-outline-secondary');
+    sessionStorage.removeItem('adminPanelOpen');
+    document.getElementById('attendanceForm').scrollIntoView({ behavior: 'smooth' });
+}
+
+function toggleAdminView() {
+    const panel = document.getElementById('adminPanel');
+    const isOpen = panel.style.display !== 'none';
+
+    if (isOpen) {
+        closeAdminPanel();
+    } else {
+        document.getElementById('adminPasswordInput').value = '';
+        document.getElementById('adminPasswordError').style.display = 'none';
+        new bootstrap.Modal(document.getElementById('adminPasswordModal')).show();
+    }
+}
+
+function verifyAdminPassword() {
+    const input = document.getElementById('adminPasswordInput');
+    if (input.value === 'COMSADMIN2026!') {
+        input.value = '';
+        document.activeElement?.blur();
+        const modalEl = document.getElementById('adminPasswordModal');
+        modalEl.addEventListener('hidden.bs.modal', function handler() {
+            modalEl.removeEventListener('hidden.bs.modal', handler);
+            openAdminPanel();
+        });
+        bootstrap.Modal.getInstance(modalEl).hide();
+    } else {
+        document.getElementById('adminPasswordError').style.display = 'block';
+        input.value = '';
+        input.focus();
+    }
+}
+
+// Reset Monthly Statistics
+function resetMonthlyStats() {
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    
+    // Get last reset date from storage
+    const lastReset = storage.getItem('lastMonthlyReset');
+    
+    if (lastReset) {
+        const lastResetDate = new Date(lastReset);
+        const lastResetMonth = lastResetDate.getMonth();
+        const lastResetYear = lastResetDate.getFullYear();
+        
+        // Check if we're still in the same month
+        if (currentMonth === lastResetMonth && currentYear === lastResetYear) {
+            // Same month, just refresh without asking
+            updateDashboard();
+            showNotification('Monthly statistics view refreshed!', 'success');
+            return;
+        }
+    }
+    
+    // Different month or first time, ask for confirmation via modal
+    let confirmModal = document.getElementById('resetStatsConfirmModal');
+    if (!confirmModal) {
+        confirmModal = document.createElement('div');
+        confirmModal.className = 'modal fade';
+        confirmModal.id = 'resetStatsConfirmModal';
+        confirmModal.tabIndex = -1;
+        confirmModal.innerHTML = `
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Reset Monthly Statistics</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">Are you sure you want to reset monthly statistics? This will clear the dashboard but preserve historical data.</div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-danger" id="resetStatsConfirmBtn">Reset</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(confirmModal);
+    }
+    const bsModal = new bootstrap.Modal(confirmModal);
+    document.getElementById('resetStatsConfirmBtn').onclick = function() {
+        bsModal.hide();
+        storage.setItem('lastMonthlyReset', now.toISOString());
+        updateDashboard();
+        showNotification('Monthly statistics view refreshed!', 'success');
+    };
+    bsModal.show();
+}
