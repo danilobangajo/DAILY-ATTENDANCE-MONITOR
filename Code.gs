@@ -262,8 +262,14 @@ function doPost(e) {
       clearEmployeeWeeklyData(sheet, data.employeeName);
     }
     if (data.type === 'fullState' && data.state) {
+      const dept = data.department || 'rv';
       PropertiesService.getScriptProperties()
-        .setProperty('appdata_' + (data.department || 'rv'), JSON.stringify(data.state));
+        .setProperty('appdata_' + dept, JSON.stringify(data.state));
+      // Also rewrite the sheet so deleted records are cleared from all cells
+      if (data.state.employees && data.state.employees.length > 0) {
+        updateDashboard(sheet, buildDashStats(data.state.employees, data.state.attendanceData || [], dept));
+      }
+      updateWeeklyReportFull(sheet, data.state.attendanceData || []);
     }
 
     return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'Synced' }))
@@ -368,6 +374,116 @@ function applyDashFormatting(sheet, row, emp, isRV) {
     ac.setBackground(aColor).setFontColor('#000').setFontWeight('bold');
     if ((emp.awol || 0) >= 4) ac.setFontColor('#fff');
   }
+}
+
+// ── buildDashStats ───────────────────────────────────────────
+// Computes dashboard stats from raw employees + attendanceData arrays
+// (mirrors what script.js updateDashboard does client-side)
+function buildDashStats(employees, attendanceData, dept) {
+  const now = new Date();
+  const curMonth = now.getMonth();
+  const curYear  = now.getFullYear();
+
+  const stats = {};
+  employees.filter(e => e.department === dept)
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+    .forEach(e => {
+      stats[e.name] = {
+        name: e.name, present: 0, absent: 0, late: 0, totalLates: 0,
+        undertime: 0, overtime: 0, awol: 0, sickLeave: 0, wfh: 0,
+        scheduleDisplay: e.scheduleDisplay || ''
+      };
+    });
+
+  attendanceData.forEach(r => {
+    if (r.department !== dept || !stats[r.name]) return;
+    const d = new Date(r.date + 'T00:00:00');
+    if (d.getMonth() !== curMonth || d.getFullYear() !== curYear) return;
+    const s = stats[r.name];
+    if (r.status === 'Present')        s.present++;
+    else if (r.status === 'Absent')    s.absent++;
+    else if (r.status === 'Late')      { s.late++; s.totalLates += r.lateMinutes || 15; }
+    else if (r.status === 'Undertime') s.undertime++;
+    else if (r.status === 'Overtime')  s.overtime++;
+    else if (r.status === 'AWOL')      s.awol++;
+    else if (r.status === 'Sick Leave') s.sickLeave++;
+    else if (r.status === 'Work From Home') s.wfh++;
+  });
+
+  return Object.values(stats);
+}
+
+// ── updateWeeklyReportFull ────────────────────────────────────
+// Like updateWeeklyReport but ALSO clears every employee's daily cells
+// for months that have NO records (handles the delete-all-records case).
+function updateWeeklyReportFull(sheet, records) {
+  ensureSheetReady(sheet);
+  const isRV      = sheet.getName() === 'RV';
+  const dashCount = getDashHeaders(isRV).length;
+  const nameCol   = 1 + dashCount;
+
+  // Build lookup: byMonth[mk][empName][dateStr] = record
+  const byMonth = {};
+  (records || []).forEach(r => {
+    if (!r.date) return;
+    const d  = new Date(r.date + 'T00:00:00');
+    const mk = d.getFullYear() + '-' + d.getMonth();
+    if (!byMonth[mk]) byMonth[mk] = {};
+    if (!byMonth[mk][r.name]) byMonth[mk][r.name] = {};
+    byMonth[mk][r.name][r.date] = r;
+  });
+
+  // Process every existing block in the sheet — clear+rewrite all
+  findMonthBlocks(sheet).forEach(block => {
+    const mk  = block.key; // "YYYY-M"
+    const [y, mo] = mk.split('-').map(Number);
+    const daysInMonth   = new Date(y, mo + 1, 0).getDate();
+    const dailyStartCol = 2 + dashCount;
+    const monthData     = byMonth[mk] || {};
+
+    getEmpRowsInBlock(sheet, block.startRow, nameCol).forEach(({ name, row }) => {
+      const empRecs = monthData[name] || {};
+      let totalDays = 0;
+      let col = dailyStartCol;
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = y + '-' + String(mo + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+        const rec = empRecs[dateStr];
+
+        sheet.getRange(row, col, 1, 3)
+          .clearContent().clearFormat()
+          .setBorder(true, true, true, true, true, true)
+          .setHorizontalAlignment('center')
+          .setVerticalAlignment('middle');
+
+        if (rec) {
+          const si   = getStatusInfo(rec.status);
+          const code = si ? si.code : (rec.status || '');
+          sheet.getRange(row, col).setValue(code);
+          sheet.getRange(row, col + 1).setValue(fmtT(rec.timeIn));
+          sheet.getRange(row, col + 2).setValue(fmtT(rec.timeOut));
+          if (si) sheet.getRange(row, col, 1, 3).setBackground(si.bg).setFontColor(si.text).setFontWeight('bold');
+          if (rec.status !== 'Work From Home') totalDays++;
+        }
+        col += 3;
+      }
+
+      // TOTAL DAYS — clear if zero
+      const tdCell = sheet.getRange(row, col);
+      if (totalDays > 0) {
+        tdCell.setValue(totalDays + (totalDays === 1 ? ' day' : ' days'))
+          .setBackground('#D1FAE5').setFontWeight('bold')
+          .setHorizontalAlignment('center').setVerticalAlignment('middle')
+          .setBorder(true, true, true, true, true, true);
+      } else {
+        tdCell.clearContent().clearFormat()
+          .setBorder(true, true, true, true, true, true)
+          .setHorizontalAlignment('center').setVerticalAlignment('middle');
+      }
+    });
+
+    Logger.log('WeeklyFull written: ' + mk + ' — ' + getEmpRowsInBlock(sheet, block.startRow, nameCol).length + ' employees');
+  });
 }
 
 // ── updateWeeklyReport ────────────────────────────────────────
