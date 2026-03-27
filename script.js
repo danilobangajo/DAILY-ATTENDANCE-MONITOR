@@ -25,7 +25,12 @@ function syncDashboardToSheets() {
     const employees = JSON.parse(storage.getItem('employees') || '[]');
     const attendanceData = loadAttendanceData();
     
-    const deptEmployees = employees.filter(e => e.department === currentDepartment);
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    const deptEmployees = employees.filter(e => e.department === currentDepartment)
+        .sort((a, b) => a.name.localeCompare(b.name));
     
     const employeeStats = deptEmployees.map(emp => {
         const stats = {
@@ -43,20 +48,18 @@ function syncDashboardToSheets() {
         };
         
         attendanceData.forEach(record => {
-            if (record.name === emp.name && record.department === currentDepartment) {
-                switch(record.status) {
-                    case 'Present': stats.present++; break;
-                    case 'Absent': stats.absent++; break;
-                    case 'Late': 
-                        stats.late++; 
-                        stats.totalLates += record.lateMinutes || 15;
-                        break;
-                    case 'Undertime': stats.undertime++; break;
-                    case 'Overtime': stats.overtime++; break;
-                    case 'AWOL': stats.awol++; break;
-                    case 'Sick Leave': stats.sickLeave++; break;
-                    case 'Work From Home': stats.wfh++; break;
-                }
+            if (record.name !== emp.name || record.department !== currentDepartment) return;
+            const d = new Date(record.date + 'T00:00:00');
+            if (d.getMonth() !== currentMonth || d.getFullYear() !== currentYear) return;
+            switch(record.status) {
+                case 'Present': stats.present++; break;
+                case 'Absent': stats.absent++; break;
+                case 'Late': stats.late++; stats.totalLates += record.lateMinutes || 15; break;
+                case 'Undertime': stats.undertime++; break;
+                case 'Overtime': stats.overtime++; break;
+                case 'AWOL': stats.awol++; break;
+                case 'Sick Leave': stats.sickLeave++; break;
+                case 'Work From Home': stats.wfh++; break;
             }
         });
         
@@ -316,6 +319,7 @@ function updateDailyReportByWeek(weekNumber, year, month) {
         return;
     }
     
+    filteredRecords.sort((a, b) => a.name.localeCompare(b.name));
     tableBody.innerHTML = '';
     filteredRecords.forEach(record => {
         const safeId = parseInt(record.id, 10);
@@ -709,6 +713,7 @@ function updateDailyReport() {
     const filteredRecords = attendanceData.filter(record => 
         record.date === currentFilterDate && record.department === currentDepartment
     );
+    filteredRecords.sort((a, b) => a.name.localeCompare(b.name));
     
     const tableHTML = filteredRecords.length === 0 ? `
         <tr>
@@ -810,7 +815,7 @@ function updateWeeklyReportWithFilter(selectedMonth = null, selectedYear = null,
         return;
     }
     
-    modalTableBody.innerHTML = Object.values(employeeRecords).map(data => {
+    modalTableBody.innerHTML = Object.values(employeeRecords).sort((a, b) => a.name.localeCompare(b.name)).map(data => {
         return `
         <tr>
             <td><strong>${data.name}</strong></td>
@@ -969,7 +974,8 @@ function updateDashboard() {
         const undertimeColorClass = getHabitualPolicyColor(habitualCount);
         const empNotes = employee && employee.scheduleNotes ? employee.scheduleNotes.toUpperCase() : '';
         const isFloat = empNotes.includes('FLOAT');
-        const schedDisplay = isFloat ? '-' : `<span class="badge bg-info text-dark">${stats.scheduleDisplay || 'Not Set'}</span>`;
+        const schedStart = employee && employee.scheduleStart ? (() => { const [h,m] = employee.scheduleStart.split(':'); const hr = parseInt(h); return `${hr%12||12}:${m} ${hr>=12?'PM':'AM'}`; })() : (stats.scheduleDisplay || 'Not Set');
+        const schedDisplay = isFloat ? '-' : `<span class="badge bg-info text-dark">${schedStart}</span>`;
         
         if (currentDepartment === 'rv') {
             return `
@@ -1104,8 +1110,8 @@ document.getElementById('attendanceForm').addEventListener('submit', function(e)
         }
     }
     
-    // Auto-detect Overtime: if total hours > 9 and status is Present or Late
-    if (timeOut && totalHours > 9 && (status === 'Present' || status === 'Late')) {
+    // Auto-detect Overtime: if total hours >= 10 and status is Present or Late
+    if (timeOut && totalHours >= 10 && (status === 'Present' || status === 'Late')) {
         status = 'Overtime';
     }
 
@@ -1178,8 +1184,8 @@ document.getElementById('attendanceForm').addEventListener('submit', function(e)
                 if (reason) attendanceData[recordIndex].reason = reason;
                 // If early out was used, override status to Undertime
                 if (status === 'Undertime') attendanceData[recordIndex].status = 'Undertime';
-                // If total hours > 9, override status to Overtime
-                else if (totalHours > 9 && (attendanceData[recordIndex].status === 'Present' || attendanceData[recordIndex].status === 'Late')) {
+                // If total hours >= 10, override status to Overtime
+                else if (totalHours >= 10 && (attendanceData[recordIndex].status === 'Present' || attendanceData[recordIndex].status === 'Late')) {
                     attendanceData[recordIndex].status = 'Overtime';
                 }
             }
@@ -1230,25 +1236,19 @@ document.getElementById('attendanceForm').addEventListener('submit', function(e)
     updateWeeklyReportWithFilter();
     updateDashboard();
     
-    // Update weekly report modal if it's open
+    // Update weekly report modal if it's open — always sync to submitted date
     const weeklyModal = document.getElementById('weeklyReportModal');
     if (weeklyModal && weeklyModal.classList.contains('show')) {
-        // Get current month/year selection
-        const monthYearSelect = document.getElementById('monthYearSelect');
-        if (monthYearSelect && monthYearSelect.value) {
-            const [selectedYear, selectedMonthStr] = monthYearSelect.value.split('-');
-            const selectedMonth = parseInt(selectedMonthStr) - 1;
-            const year = parseInt(selectedYear);
-            
-            // Check if there's a week filter active
-            const weekFilter = document.getElementById('weekFilterModal');
-            const weekNumber = weekFilter ? parseInt(weekFilter.value) : null;
-            
-            if (weekNumber) {
-                updateWeeklyReportWithFilter(selectedMonth, year, weekNumber);
-            } else {
-                updateWeeklyReportWithFilter(selectedMonth, year);
-            }
+        const reportDatePicker = document.getElementById('reportDatePicker');
+        const weekNumberInput = document.getElementById('weekNumberInput');
+        // If date picker has a value, refresh by date; otherwise default to today
+        if (reportDatePicker && reportDatePicker.value) {
+            updateWeeklyReportByDate();
+        } else if (weekNumberInput && weekNumberInput.value) {
+            updateWeeklyReportByWeek();
+        } else {
+            if (reportDatePicker) reportDatePicker.value = getLocalISODate();
+            updateWeeklyReportByDate();
         }
     }
     
@@ -1659,6 +1659,8 @@ function viewEmployeeDetails(employeeName) {
     
     // Sort by date descending, then by id descending (latest record per date wins)
     filteredRecords.sort((a, b) => new Date(b.date) - new Date(a.date) || b.id - a.id);
+    // After dedup, sort alphabetically by name then by date descending
+    // (dedup happens below, final sort applied after)
 
     // Deduplicate: keep only the first (latest id) record per date
     const seenDates = new Set();
@@ -1891,30 +1893,15 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Time Out is NEVER enabled from status change — only enabled when existing record found
     });
     
-    // Refresh weekly report when modal opens to always show current department
+    // Refresh weekly report when modal opens — default to today's date
     const weeklyReportModal = document.getElementById('weeklyReportModal');
     if (weeklyReportModal) {
         weeklyReportModal.addEventListener('show.bs.modal', function() {
-            const now = new Date();
-            const day = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-            const monday = new Date(now);
-            monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
-            const friday = new Date(monday);
-            friday.setDate(monday.getDate() + 4);
-            
-            const toISO = d => d.toISOString().split('T')[0];
-            const weekStart = toISO(monday);
-            const weekEnd = toISO(friday);
-            
+            const today = getLocalISODate();
             const reportDatePicker = document.getElementById('reportDatePicker');
-            if (reportDatePicker) reportDatePicker.value = '';
+            if (reportDatePicker) reportDatePicker.value = today;
             document.getElementById('weekNumberInput').value = '';
-            
-            // Show current week data
-            updateWeeklyReportCurrentWeek(weekStart, weekEnd);
-            
-            const dateElement = document.getElementById('selectedDateModal');
-            if (dateElement) dateElement.textContent = '';
+            updateWeeklyReportByDate();
         });
     }
 });
@@ -1962,7 +1949,7 @@ function updateWeeklyReportCurrentWeek(weekStart, weekEnd) {
         if (record.status !== 'Work From Home') employeeRecords[record.name].totalDays++;
     });
     
-    modalTableBody.innerHTML = Object.values(employeeRecords).map(data => `
+    modalTableBody.innerHTML = Object.values(employeeRecords).sort((a, b) => a.name.localeCompare(b.name)).map(data => `
         <tr>
             <td><strong>${data.name}</strong></td>
             <td class="text-center"><span class="badge bg-info text-dark">${data.scheduleDisplay}</span></td>
@@ -2114,7 +2101,7 @@ function updateWeeklyReportWithDateFilter(selectedDate) {
         return;
     }
     
-    modalTableBody.innerHTML = Object.values(employeeRecords).map(data => {
+    modalTableBody.innerHTML = Object.values(employeeRecords).sort((a, b) => a.name.localeCompare(b.name)).map(data => {
         return `
         <tr>
             <td><strong>${data.name}</strong></td>
@@ -2535,6 +2522,7 @@ function addEmployeeNameListener() {
 function openAdminPanel() {
     document.getElementById('adminPanel').style.display = 'block';
     document.getElementById('adminControls').style.display = 'flex';
+    document.getElementById('adminControls').style.visibility = 'visible';
     document.getElementById('formCol').className = 'col-lg-3';
     document.getElementById('mainRow').classList.add('admin-open');
     const btn = document.getElementById('adminToggleBtn');
@@ -2542,11 +2530,15 @@ function openAdminPanel() {
     btn.classList.remove('btn-outline-secondary');
     btn.classList.add('btn-secondary');
     sessionStorage.setItem('adminPanelOpen', '1');
+    // Hide User Manual button when admin panel is open
+    const userManualBtn = document.querySelector('[data-bs-target="#userManualModal"]');
+    if (userManualBtn) userManualBtn.style.display = 'none';
 }
 
 function closeAdminPanel() {
     document.getElementById('adminPanel').style.display = 'none';
     document.getElementById('adminControls').style.display = 'none';
+    document.getElementById('adminControls').style.visibility = 'hidden';
     document.getElementById('formCol').className = 'col-lg-3';
     document.getElementById('mainRow').classList.remove('admin-open');
     const btn = document.getElementById('adminToggleBtn');
@@ -2555,6 +2547,9 @@ function closeAdminPanel() {
     btn.classList.add('btn-outline-secondary');
     sessionStorage.removeItem('adminPanelOpen');
     document.getElementById('attendanceForm').scrollIntoView({ behavior: 'smooth' });
+    // Show User Manual button when admin panel is closed
+    const userManualBtn = document.querySelector('[data-bs-target="#userManualModal"]');
+    if (userManualBtn) userManualBtn.style.display = '';
 }
 
 function toggleAdminView() {
@@ -2590,28 +2585,6 @@ function verifyAdminPassword() {
 
 // Reset Monthly Statistics
 function resetMonthlyStats() {
-    const now = new Date();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
-    
-    // Get last reset date from storage
-    const lastReset = storage.getItem('lastMonthlyReset');
-    
-    if (lastReset) {
-        const lastResetDate = new Date(lastReset);
-        const lastResetMonth = lastResetDate.getMonth();
-        const lastResetYear = lastResetDate.getFullYear();
-        
-        // Check if we're still in the same month
-        if (currentMonth === lastResetMonth && currentYear === lastResetYear) {
-            // Same month, just refresh without asking
-            updateDashboard();
-            showNotification('Monthly statistics view refreshed!', 'success');
-            return;
-        }
-    }
-    
-    // Different month or first time, ask for confirmation via modal
     let confirmModal = document.getElementById('resetStatsConfirmModal');
     if (!confirmModal) {
         confirmModal = document.createElement('div');
@@ -2622,10 +2595,10 @@ function resetMonthlyStats() {
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h5 class="modal-title">Reset Monthly Statistics</h5>
+                        <h5 class="modal-title">Reset Attendance Records</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
-                    <div class="modal-body">Are you sure you want to reset monthly statistics? This will clear the dashboard but preserve historical data.</div>
+                    <div class="modal-body">Are you sure you want to reset all attendance records? All counts will go back to zero. <strong>Google Sheets data will not be affected.</strong></div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                         <button type="button" class="btn btn-danger" id="resetStatsConfirmBtn">Reset</button>
@@ -2638,9 +2611,11 @@ function resetMonthlyStats() {
     const bsModal = new bootstrap.Modal(confirmModal);
     document.getElementById('resetStatsConfirmBtn').onclick = function() {
         bsModal.hide();
-        storage.setItem('lastMonthlyReset', now.toISOString());
+        // Clear only local attendance data — Google Sheets is NOT touched
+        storage.setItem('attendanceData', '[]');
         updateDashboard();
-        showNotification('Monthly statistics view refreshed!', 'success');
+        updateDailyReport();
+        showNotification('Attendance records reset to zero. Google Sheets data preserved.', 'success');
     };
     bsModal.show();
 }

@@ -1,109 +1,87 @@
-function doPost(e) {
-  try {
-    const data = JSON.parse(e.postData.contents);
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    
-    let rvSheet = ss.getSheetByName('RV');
-    let comsSheet = ss.getSheetByName('COMS');
-    
-    // Create sheets if they don't exist
-    if (!rvSheet) {
-      rvSheet = ss.insertSheet('RV');
-    }
-    
-    if (!comsSheet) {
-      comsSheet = ss.insertSheet('COMS');
-    }
-    
-    const sheet = data.department === 'rv' ? rvSheet : (data.department === 'coms' ? comsSheet : null);
-    
-    if (!sheet) {
-      Logger.log('Unknown department: ' + data.department);
-      return ContentService.createTextOutput(JSON.stringify({
-        status: 'error',
-        message: 'Unknown department: ' + data.department
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    // Always ensure headers are present before any operation
-    ensureHeadersExist(sheet);
-    
-    if (data.type === 'dashboard') {
-      updateDashboard(sheet, data.employees);
-    }
-    
-    if (data.type === 'weeklyReport') {
-      updateWeeklyReport(sheet, data.records);
-    }
-    
-    if (data.type === 'deleteEmployee') {
-      deleteEmployeeData(sheet, data.employeeName);
-    }
-    
-    // Handle force sync - complete refresh of both dashboard and weekly report
-    if (data.type === 'forceSync') {
-      Logger.log('Force sync requested for: ' + data.employeeName);
-      if (data.action === 'deleteEmployee' || data.action === 'deleteRecord') {
-        // Clear specific employee data and force refresh
-        clearEmployeeWeeklyData(sheet, data.employeeName);
-      }
-    }
+// =============================================================
+// VERTICAL LAYOUT — each month is a self-contained block of rows
+//
+// Block structure (N = block start row):
+//   N+0 : Company name header  (merged across all cols, green/red)
+//   N+1 : Stat headers (PRESENT…NAME) + Day headers (Mar 1, Mar 2…)
+//   N+2 : (blank under stats)  + STATUS / TIME IN / TIME OUT per day + TOTAL DAYS
+//   N+3…: Employee data rows (one row per employee)
+//   (1 blank gap row, then next month block starts)
+//
+// Column layout (starting at col B = col 2):
+//   RV  cols 2-12 : PRESENT ABSENT LATE TOTAL_LATES UNDERTIME OVERTIME AWOL SICK_LEAVE WFH SCHED_TIME NAME
+//   COMS cols 2-10: PRESENT ABSENT LATE UNDERTIME AWOL SICK_LEAVE WFH SCHED_TIME NAME
+//   Daily cols start at col 2+dashColCount, 3 cols per day + 1 TOTAL DAYS col
+//
+// Month blocks are tracked via a hidden marker in col A:
+//   "MONTH_BLOCK:YYYY-M"  at the block's start row
+// =============================================================
 
-    // Save full app state for cross-device sharing
-    if (data.employees !== undefined || data.records !== undefined || data.type === 'fullState') {
-      const props = PropertiesService.getScriptProperties();
-      const dept = data.department || 'rv';
-      if (data.type === 'fullState' && data.state) {
-        props.setProperty('appdata_' + dept, JSON.stringify(data.state));
-      }
-    }
-    
-    return ContentService.createTextOutput(JSON.stringify({
-      status: 'success',
-      message: 'Data synced successfully'
-    })).setMimeType(ContentService.MimeType.JSON);
-    
-  } catch (error) {
-    Logger.log('Error in doPost: ' + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({
-      status: 'error',
-      message: error.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
-  }
+// ── constants ─────────────────────────────────────────────────
+
+function getDashHeaders(isRV) {
+  return isRV
+    ? ['PRESENT','ABSENT','LATE','TOTAL LATES (MINS)','UNDERTIME','OVERTIME','AWOL','SICK LEAVE / VACATION LEAVE','WORK FROM HOME','SCHEDULE TIME','NAME']
+    : ['PRESENT','ABSENT','LATE','UNDERTIME','AWOL','SICK LEAVE / VACATION LEAVE','WORK FROM HOME','SCHEDULE TIME','NAME'];
 }
 
-function ensureHeadersExist(sheet) {
-  const sheetName = sheet.getName();
-  const isRV = sheetName === 'RV';
-  const companyName = isRV ? 'RED VICTORY CONSUMERS GOODS TRADING' : 'C. OPERATIONS MANAGEMENT SERVICES';
-  
-  // Check if headers exist by looking for the company name in row 2
-  const companyHeader = sheet.getRange(2, 2).getValue();
-  const dashboardHeader = sheet.getRange(3, 2).getValue();
-  const wfhHeader = sheet.getRange(3, isRV ? 10 : 8).getValue();
-  
-  // If headers don't exist or are corrupted, recreate them
-  if (!companyHeader || companyHeader.toString() !== companyName || dashboardHeader !== 'PRESENT' || wfhHeader !== 'WORK FROM HOME') {
-    Logger.log('Headers missing or corrupted, recreating for ' + sheetName);
-    setupCompleteHeaders(sheet, companyName);
-  } else {
-    // Headers exist, just update the weekly report section for current month
-    updateWeeklyReportHeaders(sheet);
-  }
+function fmtT(t) {
+  if (!t) return '';
+  const [h, m] = t.split(':');
+  const hr = parseInt(h);
+  return (hr % 12 || 12) + ':' + m + ' ' + (hr >= 12 ? 'PM' : 'AM');
 }
 
-function setupCompleteHeaders(sheet, companyName) {
-  // Clear everything first
-  sheet.clear();
-  sheet.clearFormats();
-  sheet.setFrozenRows(0);
-  sheet.setFrozenColumns(0);
-  
-  const isRV = companyName.includes('RED VICTORY');
-  const headerColor = isRV ? '#4CAF50' : '#ef4444';
-  
-  // Company header (Row 2)
-  sheet.getRange(2, 2, 1, 11).merge()
+// ── block discovery ───────────────────────────────────────────
+
+// Returns array of { key, startRow, year, monthNum }
+function findMonthBlocks(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 1) return [];
+  const vals = sheet.getRange(1, 1, lastRow, 1).getValues();
+  const blocks = [];
+  for (let i = 0; i < vals.length; i++) {
+    const v = (vals[i][0] || '').toString();
+    if (v.startsWith('MONTH_BLOCK:')) {
+      const key = v.replace('MONTH_BLOCK:', '');
+      const [y, mo] = key.split('-').map(Number);
+      blocks.push({ key, startRow: i + 1, year: y, monthNum: mo });
+    }
+  }
+  return blocks;
+}
+
+// Returns [{name, row}] for employee data rows inside a block
+function getEmpRowsInBlock(sheet, blockStartRow, nameCol) {
+  const dataStart = blockStartRow + 3;
+  const lastRow   = sheet.getLastRow();
+  const result    = [];
+  for (let r = dataStart; r <= lastRow; r++) {
+    const marker = (sheet.getRange(r, 1).getValue() || '').toString();
+    if (marker.startsWith('MONTH_BLOCK:')) break; // next block started
+    const name = (sheet.getRange(r, nameCol).getValue() || '').toString().trim();
+    if (name) result.push({ name, row: r });
+    else break;
+  }
+  return result;
+}
+
+// ── write one month block's header rows ───────────────────────
+
+function writeBlockHeaders(sheet, startRow, year, month, isRV) {
+  const props = PropertiesService.getScriptProperties();
+  const savedName = props.getProperty(isRV ? 'companyName_rv' : 'companyName_coms');
+  const companyName = savedName || (isRV ? 'RED VICTORY CONSUMERS GOODS TRADING' : 'C. OPERATIONS MANAGEMENT SERVICES');
+  const headerColor  = isRV ? '#4CAF50' : '#ef4444';
+  const dashHeaders  = getDashHeaders(isRV);
+  const dashColCount = dashHeaders.length;          // 11 (RV) or 9 (COMS)
+  const daysInMonth  = new Date(year, month + 1, 0).getDate();
+  const totalCols    = dashColCount + daysInMonth * 3 + 1; // stats + days*3 + TOTAL DAYS
+  const startCol     = 2;                           // col B
+
+  // ── Row N+0: company header (split at freeze boundary so freeze works) ──
+  // Left part: cols 2 to NAME col (dashboard columns)
+  sheet.getRange(startRow, startCol, 1, dashColCount).merge()
     .setValue(companyName)
     .setBackground(headerColor)
     .setFontColor('#ffffff')
@@ -111,741 +89,539 @@ function setupCompleteHeaders(sheet, companyName) {
     .setHorizontalAlignment('center')
     .setVerticalAlignment('middle')
     .setFontSize(14);
-  
-  // Dashboard headers (Row 3)
-  let dashboardHeaders;
-  if (isRV) {
-    dashboardHeaders = ['PRESENT', 'ABSENT', 'LATE', 'TOTAL LATES (MINS)', 'UNDERTIME', 'OVERTIME', 'AWOL', 'SICK LEAVE / VACATION LEAVE', 'WORK FROM HOME', 'SCHEDULE TIME', 'NAME'];
-  } else {
-    dashboardHeaders = ['PRESENT', 'ABSENT', 'LATE', 'UNDERTIME', 'AWOL', 'SICK LEAVE / VACATION LEAVE', 'WORK FROM HOME', 'SCHEDULE TIME', 'NAME'];
-  }
-  
-  const headerRange = sheet.getRange(3, 2, 1, dashboardHeaders.length);
-  headerRange.setValues([dashboardHeaders])
+  // Right part: daily columns — "WEEKLY REPORT — Month Year"
+  const dailyCols = daysInMonth * 3 + 1;
+  const monthName = new Date(year, month, 1).toLocaleDateString('en-US', { month: 'long' });
+  const savedWeekly = props.getProperty((isRV ? 'weeklyLabel_rv' : 'weeklyLabel_coms') + '_' + year + '_' + month);
+  const weeklyLabel = savedWeekly || ('WEEKLY REPORT — ' + monthName + ' ' + year);
+  sheet.getRange(startRow, startCol + dashColCount, 1, dailyCols).merge()
+    .setValue(weeklyLabel)
+    .setBackground(headerColor)
+    .setFontColor('#ffffff')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle')
+    .setFontSize(14);
+
+  // ── Row N+1: stat headers + day headers ──────────────────────
+  // Stat headers
+  sheet.getRange(startRow + 1, startCol, 1, dashColCount)
+    .setValues([dashHeaders])
     .setFontWeight('bold')
     .setBackground('#f3f3f3')
     .setHorizontalAlignment('center')
     .setVerticalAlignment('middle')
+    .setWrap(true)
     .setBorder(true, true, true, true, true, true);
-  
-  // Empty row for spacing (Row 4)
-  sheet.getRange(4, 2, 1, dashboardHeaders.length).setBackground('#ffffff');
-  
-  // Setup weekly report headers
-  setupWeeklyReportHeaders(sheet, dashboardHeaders.length);
-  
-  // Set frozen rows and columns
-  sheet.setFrozenRows(4);
-  sheet.setFrozenColumns(isRV ? 13 : 11);
-  
-  Logger.log('Complete headers setup completed for ' + sheet.getName());
-}
 
-function setupWeeklyReportHeaders(sheet, dashboardColCount) {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
-  
-  // Find existing months and add current month if not exists
-  const existingMonths = findExistingMonths(sheet, dashboardColCount);
-  const currentMonthKey = year + '-' + month;
-  
-  if (!existingMonths.some(m => m.key === currentMonthKey)) {
-    // Add new month section
-    addNewMonthSection(sheet, dashboardColCount, year, month, existingMonths);
-  }
-}
-
-function findExistingMonths(sheet, dashboardColCount) {
-  const existingMonths = [];
-  const weeklyStartCol = 2 + dashboardColCount;
-  let col = weeklyStartCol;
-  
-  // Scan row 2 for existing month headers
-  while (col <= sheet.getLastColumn()) {
-    const headerValue = sheet.getRange(2, col).getValue();
-    if (headerValue && headerValue.toString().includes('WEEKLY REPORT')) {
-      const headerText = headerValue.toString();
-      const monthMatch = headerText.match(/(\w+)\s+(\d{4})\s+WEEKLY REPORT/);
-      if (monthMatch) {
-        const monthName = monthMatch[1];
-        const year = parseInt(monthMatch[2]);
-        const monthNum = new Date(Date.parse(monthName + ' 1, 2000')).getMonth();
-        const daysInMonth = new Date(year, monthNum + 1, 0).getDate();
-        const totalCols = daysInMonth * 3 + 1;
-        
-        existingMonths.push({
-          key: year + '-' + monthNum,
-          startCol: col,
-          endCol: col + totalCols - 1,
-          monthName: monthName,
-          year: year,
-          monthNum: monthNum
-        });
-        
-        col += totalCols;
-      } else {
-        col++;
-      }
-    } else {
-      col++;
-    }
-  }
-  
-  return existingMonths;
-}
-
-function addNewMonthSection(sheet, dashboardColCount, year, month, existingMonths) {
-  const monthName = new Date(year, month, 1).toLocaleDateString('en-US', { month: 'long' }).toUpperCase();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const totalWeeklyCols = daysInMonth * 3 + 1;
-  
-  // Calculate starting column for new month
-  let startCol = 2 + dashboardColCount;
-  if (existingMonths.length > 0) {
-    const lastMonth = existingMonths[existingMonths.length - 1];
-    startCol = lastMonth.endCol + 1;
-  }
-  
-  // Monthly header (Row 2)
-  sheet.getRange(2, startCol, 1, totalWeeklyCols).merge()
-    .setValue(monthName + ' ' + year + ' WEEKLY REPORT')
-    .setFontWeight('bold')
-    .setHorizontalAlignment('center')
-    .setVerticalAlignment('middle')
-    .setFontSize(14)
-    .setBackground('#BFDBFE');
-  
-  // Daily headers (Row 3)
-  let col = startCol;
+  // Day headers (merged 3 cols each)
+  let col = startCol + dashColCount;
   for (let day = 1; day <= daysInMonth; day++) {
-    const dateStr = monthName + ' ' + day;
-    
-    // Merge 3 columns for each day
-    sheet.getRange(3, col, 1, 3).merge()
-      .setValue(dateStr)
+    sheet.getRange(startRow + 1, col, 1, 3).merge()
+      .setValue(monthName + ' ' + day)
       .setFontWeight('bold')
       .setBackground('#BFDBFE')
       .setHorizontalAlignment('center')
       .setVerticalAlignment('middle')
       .setBorder(true, true, true, true, true, true);
-    
-    // Sub-headers for STATUS, TIME IN, TIME OUT (Row 4)
-    sheet.getRange(4, col).setValue('STATUS')
-      .setFontWeight('bold')
-      .setBackground('#E3F2FD')
-      .setHorizontalAlignment('center')
-      .setVerticalAlignment('middle')
-      .setBorder(true, true, true, true, true, true);
-    
-    sheet.getRange(4, col + 1).setValue('TIME IN')
-      .setFontWeight('bold')
-      .setBackground('#E3F2FD')
-      .setHorizontalAlignment('center')
-      .setVerticalAlignment('middle')
-      .setBorder(true, true, true, true, true, true);
-
-    sheet.getRange(4, col + 2).setValue('TIME OUT')
-      .setFontWeight('bold')
-      .setBackground('#E3F2FD')
-      .setHorizontalAlignment('center')
-      .setVerticalAlignment('middle')
-      .setBorder(true, true, true, true, true, true);
-    
     col += 3;
   }
-  
-  // TOTAL DAYS column (Rows 3-4 merged)
-  sheet.getRange(3, col, 2, 1).merge()
+  // TOTAL DAYS spans rows N+1 and N+2
+  sheet.getRange(startRow + 1, col, 2, 1).merge()
     .setValue('TOTAL DAYS')
     .setFontWeight('bold')
     .setBackground('#D1FAE5')
     .setHorizontalAlignment('center')
     .setVerticalAlignment('middle')
     .setBorder(true, true, true, true, true, true);
-  
-  Logger.log('Added new month section: ' + monthName + ' ' + year + ' starting at column ' + startCol);
+
+  // ── Row N+2: blank under stats + STATUS/TIME IN/TIME OUT ─────
+  sheet.getRange(startRow + 2, startCol, 1, dashColCount)
+    .setBackground('#f3f3f3')
+    .setBorder(true, true, true, true, true, true);
+
+  col = startCol + dashColCount;
+  for (let day = 1; day <= daysInMonth; day++) {
+    ['STATUS', 'TIME IN', 'TIME OUT'].forEach((lbl, i) => {
+      sheet.getRange(startRow + 2, col + i)
+        .setValue(lbl)
+        .setFontWeight('bold')
+        .setBackground('#E3F2FD')
+        .setHorizontalAlignment('center')
+        .setVerticalAlignment('middle')
+        .setBorder(true, true, true, true, true, true);
+    });
+    col += 3;
+  }
+
+  // Freeze rows (header rows) and columns up to NAME
+  sheet.setFrozenColumns(isRV ? 12 : 10);
+
+  Logger.log('Block headers written: ' + monthName + ' ' + year + ' at row ' + startRow);
 }
 
-function updateWeeklyReportHeaders(sheet) {
-  const sheetName = sheet.getName();
-  const isRV = sheetName === 'RV';
-  const dashboardColCount = isRV ? 11 : 9;
-  
-  // Check if current month section exists, if not add it
-  const now = new Date();
-  const currentMonth = now.toLocaleDateString('en-US', { month: 'long' }).toUpperCase();
-  const currentYear = now.getFullYear();
-  const currentMonthKey = currentYear + '-' + now.getMonth();
-  
-  const existingMonths = findExistingMonths(sheet, dashboardColCount);
-  const hasCurrentMonth = existingMonths.some(m => m.key === currentMonthKey);
-  
-  if (!hasCurrentMonth) {
-    Logger.log('Adding new month section: ' + currentMonth + ' ' + currentYear);
-    addNewMonthSection(sheet, dashboardColCount, currentYear, now.getMonth(), existingMonths);
+// ── get or create a month block ───────────────────────────────
+
+function getOrCreateBlock(sheet, year, month, isRV) {
+  const key    = year + '-' + month;
+  const blocks = findMonthBlocks(sheet);
+  const found  = blocks.find(b => b.key === key);
+  if (found) return found;
+
+  // Calculate where to append
+  let appendRow = 2; // first block starts at row 2 (row 1 = sentinel)
+  if (blocks.length > 0) {
+    const last       = blocks[blocks.length - 1];
+    const lastNameCol = isRV ? 12 : 10;
+    const empCount   = getEmpRowsInBlock(sheet, last.startRow, lastNameCol).length;
+    appendRow = last.startRow + 3 + empCount + 1; // 3 header rows + employees + 1 gap
+  }
+
+  // Write marker in col A (hidden)
+  sheet.getRange(appendRow, 1).setValue('MONTH_BLOCK:' + key);
+  writeBlockHeaders(sheet, appendRow, year, month, isRV);
+
+  return { key, startRow: appendRow, year, monthNum: month };
+}
+
+// ── sheet initialisation ──────────────────────────────────────
+
+function ensureSheetReady(sheet) {
+  const sentinel = (sheet.getRange(1, 1).getValue() || '').toString();
+  if (sentinel !== 'V2') {
+    sheet.clear();
+    sheet.clearFormats();
+    sheet.setFrozenRows(0);
+    sheet.setFrozenColumns(0);
+    sheet.getRange(1, 1).setValue('V2');
+    // Hide the marker column (col A) — make it 2px wide and white text
+    sheet.setColumnWidth(1, 2);
+    sheet.getRange(1, 1).setFontColor('#ffffff').setBackground('#ffffff');
   }
 }
+
+// ── doPost ────────────────────────────────────────────────────
+
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    const ss   = SpreadsheetApp.getActiveSpreadsheet();
+
+    const rvSheet   = ss.getSheetByName('RV')   || ss.insertSheet('RV');
+    const comsSheet = ss.getSheetByName('COMS') || ss.insertSheet('COMS');
+    const sheet     = data.department === 'rv' ? rvSheet : (data.department === 'coms' ? comsSheet : null);
+
+    if (!sheet) {
+      return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'Unknown department' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    ensureSheetReady(sheet);
+
+    if (data.type === 'dashboard')    updateDashboard(sheet, data.employees);
+    if (data.type === 'weeklyReport') {
+      // Ensure dashboard (employee rows) exist in the block before writing daily data
+      const props = PropertiesService.getScriptProperties();
+      const stateJson = props.getProperty('appdata_' + (data.department || 'rv'));
+      if (stateJson) {
+        const state = JSON.parse(stateJson);
+        if (state.employees && state.employees.length > 0) {
+          const isRV = sheet.getName() === 'RV';
+          const now = new Date();
+          // For each month in records, ensure employee rows exist in that block
+          const months = {};
+          (data.records || []).forEach(r => {
+            if (!r.date) return;
+            const d = new Date(r.date + 'T00:00:00');
+            months[d.getFullYear() + '-' + d.getMonth()] = { y: d.getFullYear(), mo: d.getMonth() };
+          });
+          Object.values(months).forEach(({ y, mo }) => {
+            const block = getOrCreateBlock(sheet, y, mo, isRV);
+            const nameCol = 1 + getDashHeaders(isRV).length;
+            const empRows = getEmpRowsInBlock(sheet, block.startRow, nameCol);
+            if (empRows.length === 0) {
+              // No employees yet in this block — write them from saved state
+              const deptEmps = state.employees.filter(e => e.department === data.department);
+              // Build minimal stats objects (zeros) just to populate name rows
+              const empStats = deptEmps.sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(e => ({
+                name: e.name, present:0, absent:0, late:0, totalLates:0,
+                undertime:0, overtime:0, awol:0, sickLeave:0, wfh:0,
+                scheduleDisplay: e.scheduleDisplay || ''
+              }));
+              updateDashboard(sheet, empStats);
+            }
+          });
+        }
+      }
+      updateWeeklyReport(sheet, data.records);
+    }
+    if (data.type === 'deleteEmployee') deleteEmployeeData(sheet, data.employeeName);
+    if (data.type === 'forceSync' && (data.action === 'deleteEmployee' || data.action === 'deleteRecord')) {
+      clearEmployeeWeeklyData(sheet, data.employeeName);
+    }
+    if (data.type === 'fullState' && data.state) {
+      PropertiesService.getScriptProperties()
+        .setProperty('appdata_' + (data.department || 'rv'), JSON.stringify(data.state));
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'Synced' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log('doPost error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ── updateDashboard ───────────────────────────────────────────
+// Writes PRESENT/ABSENT/LATE/… stats into the CURRENT month block.
+// Each month block has its own fresh stats — previous months are untouched.
 
 function updateDashboard(sheet, employees) {
-  if (!employees || employees.length === 0) {
-    Logger.log('No employees data to update');
-    return;
-  }
-  
-  // Ensure headers exist before updating data
-  ensureHeadersExist(sheet);
-  
-  const sheetName = sheet.getName();
-  const isRV = sheetName === 'RV';
-  const numCols = isRV ? 11 : 9;
-  const dataStartRow = 5; // Data starts from row 5
-  
-  // Clear existing employee data AND formatting (preserve headers)
+  if (!employees || employees.length === 0) return;
+  ensureSheetReady(sheet);
+
+  const isRV       = sheet.getName() === 'RV';
+  const dashHdrs   = getDashHeaders(isRV);
+  const dashCount  = dashHdrs.length;
+  const nameCol    = 1 + dashCount; // 1-based: col B=2, so nameCol = dashCount+1
+
+  const now   = new Date();
+  const block = getOrCreateBlock(sheet, now.getFullYear(), now.getMonth(), isRV);
+  const dataStart = block.startRow + 3;
+
+  employees.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  // Clear only the dashboard stat columns in this block's data rows
   const lastRow = sheet.getLastRow();
-  if (lastRow >= dataStartRow) {
-    const numColsToName = isRV ? 12 : 10; // Include name column
-    const clearRange = sheet.getRange(dataStartRow, 2, lastRow - dataStartRow + 1, numColsToName);
-    clearRange.clearContent();
-    clearRange.clearFormat();
-    
-    // DON'T clear monthly data when updating dashboard - only clear dashboard columns
-    // Monthly data should only be cleared by updateWeeklyReport function
+  if (lastRow >= dataStart) {
+    sheet.getRange(dataStart, 2, lastRow - dataStart + 1, dashCount)
+      .clearContent().clearFormat();
   }
-  
-  // Add employee data
-  employees.forEach((emp, index) => {
-    const row = dataStartRow + index;
-    
-    if (isRV) {
-      // RV format: PRESENT, ABSENT, LATE, TOTAL LATES, UNDERTIME, OVERTIME, AWOL, SICK LEAVE, WFH, SCHEDULE TIME, NAME
-      sheet.getRange(row, 2).setValue(emp.present || 0);
-      sheet.getRange(row, 3).setValue(emp.absent || 0);
-      sheet.getRange(row, 4).setValue(emp.late || 0);
-      sheet.getRange(row, 5).setValue(emp.totalLates || 0);
-      sheet.getRange(row, 6).setValue(emp.undertime || 0);
-      sheet.getRange(row, 7).setValue(emp.overtime || 0);
-      sheet.getRange(row, 8).setValue(emp.awol || 0);
-      sheet.getRange(row, 9).setValue(emp.sickLeave || 0);
-      sheet.getRange(row, 10).setValue(emp.wfh || 0);
-      sheet.getRange(row, 11).setValue(emp.scheduleDisplay || '');
-      sheet.getRange(row, 12).setValue(emp.name || '');
-    } else {
-      // COMS format: PRESENT, ABSENT, LATE, UNDERTIME, AWOL, SICK LEAVE, WFH, SCHEDULE TIME, NAME
-      sheet.getRange(row, 2).setValue(emp.present || 0);
-      sheet.getRange(row, 3).setValue(emp.absent || 0);
-      sheet.getRange(row, 4).setValue(emp.late || 0);
-      sheet.getRange(row, 5).setValue(emp.undertime || 0);
-      sheet.getRange(row, 6).setValue(emp.awol || 0);
-      sheet.getRange(row, 7).setValue(emp.sickLeave || 0);
-      sheet.getRange(row, 8).setValue(emp.wfh || 0);
-      sheet.getRange(row, 9).setValue(emp.scheduleDisplay || '');
-      sheet.getRange(row, 10).setValue(emp.name || '');
-    }
-    
-    // Apply formatting and colors
-    applyEmployeeRowFormatting(sheet, row, emp, isRV);
+
+  employees.forEach((emp, i) => {
+    const row = dataStart + i;
+    writeDashRow(sheet, row, emp, isRV);
+    applyDashFormatting(sheet, row, emp, isRV);
   });
-  
-  Logger.log('Dashboard updated with ' + employees.length + ' employees - dashboard data refreshed, monthly data preserved');
+
+  Logger.log('Dashboard updated: ' + employees.length + ' employees, block row ' + block.startRow);
 }
 
-function applyEmployeeRowFormatting(sheet, row, emp, isRV) {
-  const numCols = isRV ? 12 : 10;
-  
-  // Clear all existing formatting first
-  sheet.getRange(row, 2, 1, numCols).clearFormat();
-  
-  // Apply borders and alignment to all cells
+function writeDashRow(sheet, row, emp, isRV) {
+  if (isRV) {
+    sheet.getRange(row, 2).setValue(emp.present    || 0);
+    sheet.getRange(row, 3).setValue(emp.absent     || 0);
+    sheet.getRange(row, 4).setValue(emp.late       || 0);
+    sheet.getRange(row, 5).setValue(emp.totalLates || 0);
+    sheet.getRange(row, 6).setValue(emp.undertime  || 0);
+    sheet.getRange(row, 7).setValue(emp.overtime   || 0);
+    sheet.getRange(row, 8).setValue(emp.awol       || 0);
+    sheet.getRange(row, 9).setValue(emp.sickLeave  || 0);
+    sheet.getRange(row, 10).setValue(emp.wfh       || 0);
+    sheet.getRange(row, 11).setValue(emp.scheduleDisplay || '');
+    sheet.getRange(row, 12).setValue(emp.name      || '').setFontWeight('bold');
+  } else {
+    sheet.getRange(row, 2).setValue(emp.present    || 0);
+    sheet.getRange(row, 3).setValue(emp.absent     || 0);
+    sheet.getRange(row, 4).setValue(emp.late       || 0);
+    sheet.getRange(row, 5).setValue(emp.undertime  || 0);
+    sheet.getRange(row, 6).setValue(emp.awol       || 0);
+    sheet.getRange(row, 7).setValue(emp.sickLeave  || 0);
+    sheet.getRange(row, 8).setValue(emp.wfh        || 0);
+    sheet.getRange(row, 9).setValue(emp.scheduleDisplay || '');
+    sheet.getRange(row, 10).setValue(emp.name      || '').setFontWeight('bold');
+  }
+}
+
+function applyDashFormatting(sheet, row, emp, isRV) {
+  const numCols = isRV ? 11 : 9;
   sheet.getRange(row, 2, 1, numCols)
+    .clearFormat()
     .setBorder(true, true, true, true, true, true)
     .setHorizontalAlignment('center')
     .setVerticalAlignment('middle');
-  
-  // Apply policy colors ONLY if values are greater than 0
-  const habitualCount = (emp.absent || 0) + (emp.late || 0) + (emp.undertime || 0);
-  
-  // Present - green background ONLY if actually present
-  if ((emp.present || 0) > 0) {
+
+  // Name col — left align
+  sheet.getRange(row, isRV ? 12 : 10).setHorizontalAlignment('left');
+
+  const habitual = (emp.absent || 0) + (emp.late || 0) + (emp.undertime || 0);
+
+  if ((emp.present || 0) > 0)
     sheet.getRange(row, 2).setBackground('#d1fae5').setFontColor('#065f46').setFontWeight('bold');
-  }
-  
-  // Habitual policy colors (Absent, Late, Undertime) ONLY if values > 0
-  const habitualColor = getHabitualPolicyColor(habitualCount);
-  if (habitualColor && habitualCount > 0) {
-    if ((emp.absent || 0) > 0) {
-      sheet.getRange(row, 3).setBackground(habitualColor).setFontColor('#000000').setFontWeight('bold');
-    }
-    if ((emp.late || 0) > 0) {
-      sheet.getRange(row, 4).setBackground(habitualColor).setFontColor('#000000').setFontWeight('bold');
-    }
-    if ((emp.undertime || 0) > 0) {
-      const undertimeCol = isRV ? 6 : 5;
-      sheet.getRange(row, undertimeCol).setBackground(habitualColor).setFontColor('#000000').setFontWeight('bold');
-    }
+
+  const hColor = getHabitualColor(habitual);
+  if (hColor) {
+    if ((emp.absent    || 0) > 0) sheet.getRange(row, 3).setBackground(hColor).setFontColor('#000').setFontWeight('bold');
+    if ((emp.late      || 0) > 0) sheet.getRange(row, 4).setBackground(hColor).setFontColor('#000').setFontWeight('bold');
+    if ((emp.undertime || 0) > 0) sheet.getRange(row, isRV ? 6 : 5).setBackground(hColor).setFontColor('#000').setFontWeight('bold');
   }
 
-  // WFH color (green) ONLY if WFH > 0
-  if ((emp.wfh || 0) > 0) {
-    const wfhCol = isRV ? 10 : 8;
-    sheet.getRange(row, wfhCol).setBackground('#D1FAE5').setFontColor('#065f46').setFontWeight('bold');
-  }
-  
-  // AWOL policy colors ONLY if AWOL > 0
-  const awolColor = getAWOLPolicyColor(emp.awol || 0);
-  if (awolColor && (emp.awol || 0) > 0) {
-    const awolCol = isRV ? 8 : 6;
-    sheet.getRange(row, awolCol).setBackground(awolColor).setFontColor('#000000').setFontWeight('bold');
-    if ((emp.awol || 0) >= 4) {
-      sheet.getRange(row, awolCol).setFontColor('#ffffff');
-    }
+  if ((emp.wfh || 0) > 0)
+    sheet.getRange(row, isRV ? 10 : 8).setBackground('#D1FAE5').setFontColor('#065f46').setFontWeight('bold');
+
+  const aColor = getAWOLColor(emp.awol || 0);
+  if (aColor) {
+    const ac = sheet.getRange(row, isRV ? 8 : 6);
+    ac.setBackground(aColor).setFontColor('#000').setFontWeight('bold');
+    if ((emp.awol || 0) >= 4) ac.setFontColor('#fff');
   }
 }
 
+// ── updateWeeklyReport ────────────────────────────────────────
+// Writes daily STATUS/TIME IN/TIME OUT into the correct month block.
+// Each month in the records gets its own vertical block.
+
 function updateWeeklyReport(sheet, records) {
-  if (!sheet) {
-    Logger.log('updateWeeklyReport: sheet is undefined, skipping');
-    return;
-  }
-  if (!records || records.length === 0) {
-    Logger.log('No records to update in weekly report - clearing all monthly data');
-    // If no records, clear all monthly report data but keep headers
-    clearAllMonthlyData(sheet);
-    return;
-  }
-  
-  // Ensure headers exist before updating data
-  ensureHeadersExist(sheet);
-  
-  const sheetName = sheet.getName();
-  const isRV = sheetName === 'RV';
-  const dashboardColCount = isRV ? 11 : 9;
-  const nameCol = isRV ? 12 : 10;
-  const dataStartRow = 5;
-  
-  // Group records by employee and month
-  const employeeRecords = {};
-  records.forEach(record => {
-    if (!employeeRecords[record.name]) {
-      employeeRecords[record.name] = {};
-    }
-    employeeRecords[record.name][record.date] = record;
+  if (!sheet || !records || records.length === 0) return;
+  ensureSheetReady(sheet);
+
+  const isRV      = sheet.getName() === 'RV';
+  const dashCount = getDashHeaders(isRV).length;
+  const nameCol   = 1 + dashCount;
+
+  // Group records: byMonth[YYYY-M][empName][dateStr] = record
+  const byMonth = {};
+  records.forEach(r => {
+    if (!r.date) return;
+    const d  = new Date(r.date + 'T00:00:00');
+    const mk = d.getFullYear() + '-' + d.getMonth();
+    if (!byMonth[mk]) byMonth[mk] = {};
+    if (!byMonth[mk][r.name]) byMonth[mk][r.name] = {};
+    byMonth[mk][r.name][r.date] = r;
   });
-  
-  // Find all employees in the dashboard
-  const lastRow = sheet.getLastRow();
-  const employees = [];
-  
-  for (let i = dataStartRow; i <= lastRow; i++) {
-    const name = sheet.getRange(i, nameCol).getValue();
-    if (name && name.toString().trim() !== '') {
-      employees.push({ name: name.toString().trim(), row: i });
-    }
-  }
-  
-  if (employees.length === 0) {
-    Logger.log('No employees found in dashboard to update weekly report');
-    return;
-  }
-  
-  // Get existing months
-  const existingMonths = findExistingMonths(sheet, dashboardColCount);
-  
-  // Clear only current month data first, then update
-  clearCurrentMonthWeeklyData(sheet);
-  
-  // Update weekly report for each employee and each month
-  employees.forEach(emp => {
-    const row = emp.row;
-    
-    existingMonths.forEach(monthInfo => {
-      const year = monthInfo.year;
-      const month = monthInfo.monthNum;
-      const daysInMonth = new Date(year, month + 1, 0).getDate();
-      
-      let col = monthInfo.startCol;
+
+  Object.keys(byMonth).forEach(mk => {
+    const [y, mo]  = mk.split('-').map(Number);
+    const block    = getOrCreateBlock(sheet, y, mo, isRV);
+    const dataStart = block.startRow + 3;
+    const daysInMonth  = new Date(y, mo + 1, 0).getDate();
+    const dailyStartCol = 2 + dashCount;
+
+    const empRows = getEmpRowsInBlock(sheet, block.startRow, nameCol);
+
+    empRows.forEach(({ name, row }) => {
+      const empRecs = byMonth[mk][name] || {};
       let totalDays = 0;
-      
-      // Fill in daily data for this month
+      let col = dailyStartCol;
+
       for (let day = 1; day <= daysInMonth; day++) {
-        const dateStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
-        const record = employeeRecords[emp.name] ? employeeRecords[emp.name][dateStr] : null;
-        
-        if (record) {
-          const statusInfo = getStatusDisplayInfo(record.status);
-          const statusCode = statusInfo ? statusInfo.code : (record.status || '');
-          
-          // Set status, time in, and time out
-          const fmtT = t => {
-            if (!t) return '';
-            const [h, m] = t.split(':');
-            const hr = parseInt(h);
-            return (hr % 12 || 12) + ':' + m + ' ' + (hr >= 12 ? 'PM' : 'AM');
-          };
-          sheet.getRange(row, col).setValue(statusCode);
-          sheet.getRange(row, col + 1).setValue(fmtT(record.timeIn));
-          sheet.getRange(row, col + 2).setValue(fmtT(record.timeOut));
-          
-          // Apply colors
-          if (statusInfo) {
-            sheet.getRange(row, col).setBackground(statusInfo.bg).setFontColor(statusInfo.text).setFontWeight('bold');
-            sheet.getRange(row, col + 1).setBackground(statusInfo.bg).setFontColor(statusInfo.text).setFontWeight('bold');
-            sheet.getRange(row, col + 2).setBackground(statusInfo.bg).setFontColor(statusInfo.text).setFontWeight('bold');
-          }
-          
-          if (record.status !== 'Work From Home') totalDays++;
-        }
-        
-        // Apply borders and alignment
+        const dateStr = y + '-' + String(mo + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+        const rec = empRecs[dateStr];
+
         sheet.getRange(row, col, 1, 3)
+          .clearContent().clearFormat()
           .setBorder(true, true, true, true, true, true)
           .setHorizontalAlignment('center')
           .setVerticalAlignment('middle');
-        
+
+        if (rec) {
+          const si   = getStatusInfo(rec.status);
+          const code = si ? si.code : (rec.status || '');
+          sheet.getRange(row, col).setValue(code);
+          sheet.getRange(row, col + 1).setValue(fmtT(rec.timeIn));
+          sheet.getRange(row, col + 2).setValue(fmtT(rec.timeOut));
+          if (si) {
+            sheet.getRange(row, col, 1, 3)
+              .setBackground(si.bg).setFontColor(si.text).setFontWeight('bold');
+          }
+          if (rec.status !== 'Work From Home') totalDays++;
+        }
         col += 3;
       }
-      
-      // Set TOTAL DAYS for this month
-      sheet.getRange(row, col).setValue(totalDays > 0 ? totalDays + (totalDays === 1 ? ' day' : ' days') : '')
-        .setBackground('#D1FAE5')
-        .setFontWeight('bold')
-        .setHorizontalAlignment('center')
-        .setVerticalAlignment('middle')
+
+      // TOTAL DAYS
+      sheet.getRange(row, col)
+        .setValue(totalDays > 0 ? totalDays + (totalDays === 1 ? ' day' : ' days') : '')
+        .setBackground('#D1FAE5').setFontWeight('bold')
+        .setHorizontalAlignment('center').setVerticalAlignment('middle')
         .setBorder(true, true, true, true, true, true);
     });
+
+    Logger.log('Weekly written: ' + mk + ' — ' + empRows.length + ' employees');
   });
-  
-  Logger.log('Weekly report updated for ' + employees.length + ' employees across ' + existingMonths.length + ' months');
 }
+
+// ── deleteEmployeeData ────────────────────────────────────────
 
 function deleteEmployeeData(sheet, employeeName) {
-  if (!employeeName) {
-    Logger.log('No employee name provided for deletion');
-    return;
-  }
-  
-  const sheetName = sheet.getName();
-  const isRV = sheetName === 'RV';
+  if (!employeeName) return;
+  const isRV    = sheet.getName() === 'RV';
   const nameCol = isRV ? 12 : 10;
-  const dataStartRow = 5;
   const lastRow = sheet.getLastRow();
-  
-  // Find and delete the employee row
-  for (let i = dataStartRow; i <= lastRow; i++) {
-    const cellValue = sheet.getRange(i, nameCol).getValue();
-    if (cellValue && cellValue.toString().trim() === employeeName.trim()) {
+  for (let i = 1; i <= lastRow; i++) {
+    const v = (sheet.getRange(i, nameCol).getValue() || '').toString().trim();
+    if (v === employeeName.trim()) {
       sheet.deleteRow(i);
-      Logger.log('Deleted employee: ' + employeeName + ' from row ' + i);
+      Logger.log('Deleted employee row: ' + employeeName);
       return;
     }
   }
-  
-  Logger.log('Employee not found for deletion: ' + employeeName);
 }
 
-// Clear weekly data for a specific employee across all months
+// ── clearEmployeeWeeklyData ───────────────────────────────────
+
 function clearEmployeeWeeklyData(sheet, employeeName) {
-  if (!employeeName) {
-    Logger.log('No employee name provided for weekly data clearing');
-    return;
-  }
-  
-  const sheetName = sheet.getName();
-  const isRV = sheetName === 'RV';
-  const dashboardColCount = isRV ? 11 : 9;
-  const nameCol = isRV ? 12 : 10;
-  const dataStartRow = 5;
-  const lastRow = sheet.getLastRow();
-  
-  // Get existing months
-  const existingMonths = findExistingMonths(sheet, dashboardColCount);
-  
-  // Find the employee and clear their weekly data across all months
-  for (let i = dataStartRow; i <= lastRow; i++) {
-    const cellValue = sheet.getRange(i, nameCol).getValue();
-    if (cellValue && cellValue.toString().trim() === employeeName.trim()) {
-      // Clear weekly data for this employee across all months
-      existingMonths.forEach(monthInfo => {
-        const year = monthInfo.year;
-        const month = monthInfo.monthNum;
-        const daysInMonth = new Date(year, month + 1, 0).getDate();
-        const totalWeeklyCols = (daysInMonth * 3) + 1;
-        
-        sheet.getRange(i, monthInfo.startCol, 1, totalWeeklyCols).clearContent().clearFormat();
-        
-        // Reapply borders and basic formatting
-        for (let day = 1; day <= daysInMonth; day++) {
-          const col = monthInfo.startCol + ((day - 1) * 3);
-          sheet.getRange(i, col, 1, 3)
-            .setBorder(true, true, true, true, true, true)
-            .setHorizontalAlignment('center')
-            .setVerticalAlignment('middle');
-        }
-        
-        // Format TOTAL DAYS column
-        sheet.getRange(i, monthInfo.startCol + (daysInMonth * 3))
-          .setBackground('#D1FAE5')
-          .setFontWeight('bold')
-          .setHorizontalAlignment('center')
-          .setVerticalAlignment('middle')
-          .setBorder(true, true, true, true, true, true);
-      });
-      
-      Logger.log('Cleared weekly data for employee: ' + employeeName + ' at row ' + i + ' across all months');
-      return;
-    }
-  }
-  
-  Logger.log('Employee not found for weekly data clearing: ' + employeeName);
-}
+  if (!employeeName) return;
+  const isRV      = sheet.getName() === 'RV';
+  const dashCount = getDashHeaders(isRV).length;
+  const nameCol   = 1 + dashCount;
 
-// Clear current month weekly data while preserving headers and other months
-function clearCurrentMonthWeeklyData(sheet) {
-  if (!sheet) {
-    Logger.log('clearCurrentMonthWeeklyData: sheet is undefined, skipping');
-    return;
-  }
-  const sheetName = sheet.getName();
-  const isRV = sheetName === 'RV';
-  const dashboardColCount = isRV ? 11 : 9;
-  const dataStartRow = 5;
-  const lastRow = sheet.getLastRow();
-  
-  if (lastRow < dataStartRow) {
-    Logger.log('No data rows to clear');
-    return;
-  }
-  
-  // Get current month info
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth();
-  const currentMonthKey = currentYear + '-' + currentMonth;
-  
-  // Find current month section
-  const existingMonths = findExistingMonths(sheet, dashboardColCount);
-  const currentMonthInfo = existingMonths.find(m => m.key === currentMonthKey);
-  
-  if (currentMonthInfo) {
-    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-    const totalWeeklyCols = (daysInMonth * 3) + 1;
-    
-    // Clear current month weekly data for all employees
-    sheet.getRange(dataStartRow, currentMonthInfo.startCol, lastRow - dataStartRow + 1, totalWeeklyCols)
-      .clearContent()
-      .clearFormat();
-    
-    Logger.log('Cleared current month weekly data from rows ' + dataStartRow + ' to ' + lastRow);
-  } else {
-    Logger.log('Current month section not found');
-  }
-}
-
-// Clear all monthly sections data while preserving headers
-function clearAllMonthlyData(sheet) {
-  if (!sheet) {
-    Logger.log('clearAllMonthlyData: sheet is undefined, skipping');
-    return;
-  }
-  const sheetName = sheet.getName();
-  const isRV = sheetName === 'RV';
-  const dashboardColCount = isRV ? 11 : 9;
-  const dataStartRow = 5;
-  const lastRow = sheet.getLastRow();
-  
-  if (lastRow < dataStartRow) {
-    Logger.log('No data rows to clear');
-    return;
-  }
-  
-  // Get all existing months
-  const existingMonths = findExistingMonths(sheet, dashboardColCount);
-  
-  if (existingMonths.length > 0) {
-    // Clear data for all monthly sections
-    existingMonths.forEach(monthInfo => {
-      const year = monthInfo.year;
-      const month = monthInfo.monthNum;
-      const daysInMonth = new Date(year, month + 1, 0).getDate();
-      const totalWeeklyCols = (daysInMonth * 3) + 1;
-      
-      // Clear all monthly data for all employees
-      sheet.getRange(dataStartRow, monthInfo.startCol, lastRow - dataStartRow + 1, totalWeeklyCols)
-        .clearContent()
-        .clearFormat();
+  findMonthBlocks(sheet).forEach(block => {
+    getEmpRowsInBlock(sheet, block.startRow, nameCol).forEach(({ name, row }) => {
+      if (name !== employeeName.trim()) return;
+      const days  = new Date(block.year, block.monthNum + 1, 0).getDate();
+      const start = 2 + dashCount;
+      sheet.getRange(row, start, 1, days * 3 + 1).clearContent().clearFormat();
     });
-    
-    Logger.log('Cleared all monthly data from rows ' + dataStartRow + ' to ' + lastRow + ' across ' + existingMonths.length + ' months');
-  } else {
-    Logger.log('No monthly sections found to clear');
-  }
+  });
 }
 
-// Policy color functions
-function getAWOLPolicyColor(awolCount) {
-  if (awolCount === 0) return null;
-  if (awolCount === 1) return '#F4E4A6'; // Light yellow
-  if (awolCount === 2) return '#E8C89A'; // Light orange
-  if (awolCount === 3) return '#D9956B'; // Orange
-  return '#C1503A'; // Dark red
+// ── policy color helpers ──────────────────────────────────────
+
+function getAWOLColor(n) {
+  if (n <= 0) return null;
+  if (n === 1) return '#F4E4A6';
+  if (n === 2) return '#E8C89A';
+  if (n === 3) return '#D9956B';
+  return '#C1503A';
 }
 
-function getHabitualPolicyColor(count) {
-  if (count === 0) return null;
-  if (count === 1) return '#F4E4A6'; // Light yellow
-  if (count === 2) return '#D9C4A8'; // Light brown
-  if (count === 3) return '#D9956B'; // Orange
-  if (count === 4) return '#D4B5A8'; // Light red-brown
-  if (count === 5) return '#C98B7A'; // Red-brown
-  if (count === 6) return '#B85C52'; // Dark red-brown
-  if (count === 7) return '#A63D3D'; // Dark red
-  if (count === 8) return '#8B2E2E'; // Very dark red
-  return '#3D3D3D'; // Almost black
+function getHabitualColor(n) {
+  if (n <= 0) return null;
+  if (n === 1) return '#F4E4A6';
+  if (n === 2) return '#D9C4A8';
+  if (n === 3) return '#D9956B';
+  if (n === 4) return '#D4B5A8';
+  if (n === 5) return '#C98B7A';
+  if (n === 6) return '#B85C52';
+  if (n === 7) return '#A63D3D';
+  if (n === 8) return '#8B2E2E';
+  return '#3D3D3D';
 }
 
-function getStatusDisplayInfo(status) {
-  const statusMap = {
-    'Present': { bg: '#BFDBFE', text: '#1e3a8a', code: 'P' },
-    'Absent': { bg: '#FCA5A5', text: '#7f1d1d', code: 'A' },
-    'Late': { bg: '#FED7AA', text: '#7c2d12', code: 'L' },
-    'Undertime': { bg: '#E9D5FF', text: '#581c87', code: 'UT' },
-    'AWOL': { bg: '#FCA5A5', text: '#7f1d1d', code: 'AWOL' },
-    'Sick Leave': { bg: '#BFDBFE', text: '#1e3a8a', code: 'SL' },
-    'No Schedule': { bg: '#BFDBFE', text: '#1e3a8a', code: 'NS' },
+function getStatusInfo(status) {
+  const map = {
+    'Present':            { bg: '#BFDBFE', text: '#1e3a8a', code: 'P'    },
+    'Absent':             { bg: '#FCA5A5', text: '#7f1d1d', code: 'A'    },
+    'Late':               { bg: '#FED7AA', text: '#7c2d12', code: 'L'    },
+    'Undertime':          { bg: '#E9D5FF', text: '#581c87', code: 'UT'   },
+    'AWOL':               { bg: '#FCA5A5', text: '#7f1d1d', code: 'AWOL' },
+    'Sick Leave':         { bg: '#BFDBFE', text: '#1e3a8a', code: 'SL'   },
+    'No Schedule':        { bg: '#BFDBFE', text: '#1e3a8a', code: 'NS'   },
     'Late and Undertime': { bg: '#FED7AA', text: '#7c2d12', code: 'L&UT' },
-    'Work From Home': { bg: '#D1FAE5', text: '#065f46', code: 'WF' }
+    'Work From Home':     { bg: '#D1FAE5', text: '#065f46', code: 'WFH'  }
   };
-  return statusMap[status] || null;
+  return map[status] || null;
 }
+
+// ── doGet ─────────────────────────────────────────────────────
 
 function doGet(e) {
   const props = PropertiesService.getScriptProperties();
-  const dept = (e && e.parameter && e.parameter.department) ? e.parameter.department : null;
-
+  const dept  = e && e.parameter && e.parameter.department ? e.parameter.department : null;
   if (dept) {
-    const data = props.getProperty('appdata_' + dept) || '{"employees":[],"attendanceData":[]}';
-    return ContentService.createTextOutput(data).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(
+      props.getProperty('appdata_' + dept) || '{"employees":[],"attendanceData":[]}'
+    ).setMimeType(ContentService.MimeType.JSON);
   }
-
-  // Return both departments
   const rv   = props.getProperty('appdata_rv')   || '{"employees":[],"attendanceData":[]}';
   const coms = props.getProperty('appdata_coms') || '{"employees":[],"attendanceData":[]}';
-  return ContentService.createTextOutput(JSON.stringify({ rv: JSON.parse(rv), coms: JSON.parse(coms) }))
-    .setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(
+    JSON.stringify({ rv: JSON.parse(rv), coms: JSON.parse(coms) })
+  ).setMimeType(ContentService.MimeType.JSON);
 }
 
-// Add menu to Google Sheets UI
+// ── menu ──────────────────────────────────────────────────────
+
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Attendance Monitor')
-    .addItem('Update Headers (Add WFH Column)', 'updateHeadersFromMenu')
-    .addItem('Force Recreate All Headers', 'forceRecreateHeaders')
-    .addItem('Force Complete Refresh', 'forceCompleteRefresh')
+    .addItem('Force Reset Sheets', 'forceRecreateHeaders')
+    .addItem('Set RV Company Name', 'setRVCompanyName')
+    .addItem('Set COMS Company Name', 'setCOMSCompanyName')
+    .addItem('Set RV Weekly Report Label', 'setRVWeeklyLabel')
+    .addItem('Set COMS Weekly Report Label', 'setCOMSWeeklyLabel')
     .addToUi();
 }
 
-// Update headers from menu — adds WFH column if missing, preserves data
-function updateHeadersFromMenu() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheets = [
-    { sheet: ss.getSheetByName('RV'),   company: 'RED VICTORY CONSUMERS GOODS TRADING',  isRV: true  },
-    { sheet: ss.getSheetByName('COMS'), company: 'C. OPERATIONS MANAGEMENT SERVICES',     isRV: false }
-  ];
-
-  sheets.forEach(({ sheet, company, isRV }) => {
-    if (!sheet) return;
-
-    // Expected dashboard headers
-    const expectedHeaders = isRV
-      ? ['PRESENT', 'ABSENT', 'LATE', 'TOTAL LATES (MINS)', 'UNDERTIME', 'OVERTIME', 'AWOL', 'SICK LEAVE / VACATION LEAVE', 'WORK FROM HOME', 'SCHEDULE TIME', 'NAME']
-      : ['PRESENT', 'ABSENT', 'LATE', 'UNDERTIME', 'AWOL', 'SICK LEAVE / VACATION LEAVE', 'WORK FROM HOME', 'SCHEDULE TIME', 'NAME'];
-
-    // Read current row 3 headers starting at col 2
-    const headerCount = expectedHeaders.length;
-    const currentHeaders = sheet.getRange(3, 2, 1, headerCount).getValues()[0];
-
-    // Check if headers already match
-    const headersMatch = expectedHeaders.every((h, i) => currentHeaders[i] === h);
-    if (!headersMatch) {
-      // Overwrite row 3 dashboard headers
-      sheet.getRange(3, 2, 1, headerCount)
-        .setValues([expectedHeaders])
-        .setFontWeight('bold')
-        .setBackground('#f3f3f3')
-        .setHorizontalAlignment('center')
-        .setVerticalAlignment('middle')
-        .setBorder(true, true, true, true, true, true);
-      Logger.log('Updated dashboard headers for ' + sheet.getName());
+function setRVCompanyName() {
+  const ui = SpreadsheetApp.getUi();
+  const props = PropertiesService.getScriptProperties();
+  const current = props.getProperty('companyName_rv') || 'RED VICTORY CONSUMERS GOODS TRADING';
+  const result = ui.prompt('Set RV Company Name', 'Current: ' + current + '\n\nEnter new name:', ui.ButtonSet.OK_CANCEL);
+  if (result.getSelectedButton() === ui.Button.OK) {
+    const name = result.getResponseText().trim();
+    if (name) {
+      props.setProperty('companyName_rv', name);
+      ui.alert('Saved! RV company name set to: ' + name + '\n\nIt will appear on the next sync or reset.');
     }
-
-    // Also ensure company header row 2 is correct
-    const headerColor = isRV ? '#4CAF50' : '#ef4444';
-    sheet.getRange(2, 2, 1, headerCount).merge()
-      .setValue(company)
-      .setBackground(headerColor)
-      .setFontColor('#ffffff')
-      .setFontWeight('bold')
-      .setHorizontalAlignment('center')
-      .setVerticalAlignment('middle')
-      .setFontSize(14);
-
-    // Ensure weekly report month section exists
-    updateWeeklyReportHeaders(sheet);
-  });
-
-  SpreadsheetApp.getUi().alert('Headers updated successfully for RV and COMS sheets!');
+  }
 }
 
-// Manual function to force recreate all headers
+function setCOMSCompanyName() {
+  const ui = SpreadsheetApp.getUi();
+  const props = PropertiesService.getScriptProperties();
+  const current = props.getProperty('companyName_coms') || 'C. OPERATIONS MANAGEMENT SERVICES';
+  const result = ui.prompt('Set COMS Company Name', 'Current: ' + current + '\n\nEnter new name:', ui.ButtonSet.OK_CANCEL);
+  if (result.getSelectedButton() === ui.Button.OK) {
+    const name = result.getResponseText().trim();
+    if (name) {
+      props.setProperty('companyName_coms', name);
+      ui.alert('Saved! COMS company name set to: ' + name + '\n\nIt will appear on the next sync or reset.');
+    }
+  }
+}
+
 function forceRecreateHeaders() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  let rvSheet = ss.getSheetByName('RV');
-  let comsSheet = ss.getSheetByName('COMS');
-  
-  if (!rvSheet) {
-    rvSheet = ss.insertSheet('RV');
-  }
-  
-  if (!comsSheet) {
-    comsSheet = ss.insertSheet('COMS');
-  }
-  
-  Logger.log('Force recreating RV headers...');
-  setupCompleteHeaders(rvSheet, 'RED VICTORY CONSUMERS GOODS TRADING');
-  
-  Logger.log('Force recreating COMS headers...');
-  setupCompleteHeaders(comsSheet, 'C. OPERATIONS MANAGEMENT SERVICES');
-  
-  Logger.log('All headers recreated successfully!');
-  SpreadsheetApp.getUi().alert('Headers recreated successfully for both RV and COMS sheets!');
-  
-  return 'Headers recreated successfully!';
+  const depts = [
+    { name: 'RV',   isRV: true  },
+    { name: 'COMS', isRV: false }
+  ];
+  const now = new Date();
+
+  depts.forEach(({ name, isRV }) => {
+    const sh = ss.getSheetByName(name) || ss.insertSheet(name);
+    sh.clear();
+    sh.clearFormats();
+    sh.setFrozenRows(0);
+    sh.setFrozenColumns(0);
+
+    // Write sentinel in col A row 1
+    sh.getRange(1, 1).setValue('V2');
+    sh.setColumnWidth(1, 2);
+    sh.getRange(1, 1).setFontColor('#ffffff').setBackground('#ffffff');
+
+    // Write current month block starting at row 2
+    sh.getRange(2, 1).setValue('MONTH_BLOCK:' + now.getFullYear() + '-' + now.getMonth());
+    writeBlockHeaders(sh, 2, now.getFullYear(), now.getMonth(), isRV);
+  });
+
+  SpreadsheetApp.getUi().alert('Sheets reset with current month layout. Sync from the app to populate employee data.');
 }
 
-// Force complete data refresh - clears everything and rebuilds
-function forceCompleteRefresh() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  let rvSheet = ss.getSheetByName('RV');
-  let comsSheet = ss.getSheetByName('COMS');
-  
-  if (rvSheet) {
-    Logger.log('Completely clearing and refreshing RV sheet...');
-    rvSheet.clear();
-    rvSheet.clearFormats();
-    setupCompleteHeaders(rvSheet, 'RED VICTORY CONSUMERS GOODS TRADING');
+function setRVWeeklyLabel() { setWeeklyLabel_('rv'); }
+function setCOMSWeeklyLabel() { setWeeklyLabel_('coms'); }
+
+function setWeeklyLabel_(dept) {
+  const ui = SpreadsheetApp.getUi();
+  const props = PropertiesService.getScriptProperties();
+  const now = new Date();
+  const y = now.getFullYear(), mo = now.getMonth();
+  const monthName = now.toLocaleDateString('en-US', { month: 'long' });
+  const key = 'weeklyLabel_' + dept + '_' + y + '_' + mo;
+  const current = props.getProperty(key) || ('WEEKLY REPORT — ' + monthName + ' ' + y);
+  const result = ui.prompt('Set Weekly Report Label (' + dept.toUpperCase() + ')',
+    'Current: ' + current + '\n\nEnter new label (leave blank to reset to default):', ui.ButtonSet.OK_CANCEL);
+  if (result.getSelectedButton() === ui.Button.OK) {
+    const val = result.getResponseText().trim();
+    if (val) {
+      props.setProperty(key, val);
+      ui.alert('Saved! Label set to: ' + val + '\n\nRun Force Reset Sheets to apply.');
+    } else {
+      props.deleteProperty(key);
+      ui.alert('Reset to default: WEEKLY REPORT — ' + monthName + ' ' + y);
+    }
   }
-  
-  if (comsSheet) {
-    Logger.log('Completely clearing and refreshing COMS sheet...');
-    comsSheet.clear();
-    comsSheet.clearFormats();
-    setupCompleteHeaders(comsSheet, 'C. OPERATIONS MANAGEMENT SERVICES');
-  }
-  
-  Logger.log('Complete refresh finished!');
-  SpreadsheetApp.getUi().alert('Complete refresh finished! All data and formatting cleared.');
-  
-  return 'Complete refresh finished!';
 }

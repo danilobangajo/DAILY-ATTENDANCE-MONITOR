@@ -33,20 +33,20 @@
 
     <div class="container-fluid px-4 py-2">
         <!-- Department Tabs -->
-        <div class="mb-2 d-flex justify-content-between align-items-center" id="tabBar">
+        <div class="mb-2 d-flex align-items-center" id="tabBar">
             <div class="btn-group" role="group">
                 <button type="button" class="btn btn-primary active" id="rvTab" onclick="switchDepartment('rv')">RV</button>
                 <button type="button" class="btn btn-outline-primary" id="comsTab" onclick="switchDepartment('coms')">Coms</button>
             </div>
             <div class="d-flex gap-2 align-items-center ms-auto">
+                <div id="adminControls" style="display:none; visibility:hidden;" class="d-flex gap-2 align-items-center">
+                    <button class="btn btn-sm btn-outline-info" data-bs-toggle="modal" data-bs-target="#adminManualModal" title="Admin Manual">
+                        <i class="bi bi-journal-text me-1"></i>Admin Manual
+                    </button>
+                </div>
                 <button class="btn btn-sm" onclick="toggleAdminView()" id="adminToggleBtn">
                     <i class="bi bi-shield-lock me-1"></i>Admin
                 </button>
-                <div id="adminControls" style="display:none;" class="d-flex gap-2">
-                    <button class="btn btn-policy" data-bs-toggle="modal" data-bs-target="#policyModal" title="Attendance Policy">
-                        <i class="bi bi-info-circle"></i>
-                    </button>
-                </div>
             </div>
         </div>
 
@@ -55,9 +55,14 @@
             <div class="col-lg-3" id="formCol">
                 <div class="card shadow-sm border-0 fixed-height-card">
                     <div class="card-body">
-                        <div class="card-title-wrapper">
-                            <i class="bi bi-circle-fill text-success me-2" id="deptDot"></i>
-                            <h5 class="card-title mb-0">Report Attendance Log</h5>
+                        <div class="card-title-wrapper d-flex justify-content-between align-items-center mb-2">
+                            <div class="d-flex align-items-center">
+                                <i class="bi bi-circle-fill text-success me-2" id="deptDot"></i>
+                                <h5 class="card-title mb-0">Report Attendance Log</h5>
+                            </div>
+                            <button class="btn btn-outline-info btn-sm" data-bs-toggle="modal" data-bs-target="#userManualModal" title="User Manual">
+                                <i class="bi bi-book"></i>
+                            </button>
                         </div>
                         
                         <form id="attendanceForm">
@@ -137,6 +142,10 @@
                                 <button class="btn btn-sm btn-outline-danger" onclick="resetMonthlyStats()" title="Reset Monthly Statistics">
                                     <i class="bi bi-arrow-clockwise"></i>
                                 </button>
+                                <button class="btn btn-policy btn-sm" data-bs-toggle="modal" data-bs-target="#policyModal" title="Attendance Policy">
+                                    <i class="bi bi-info-circle"></i>
+                                </button>
+
                             </div>
                         </div>
                         
@@ -164,6 +173,115 @@
                             </table>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Guide Modal (for regular users) -->
+    <div class="modal fade" id="userManualModal" tabindex="-1" aria-labelledby="userManualModalLabel">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="userManualModalLabel"><i class="bi bi-info-circle me-2"></i>How to Use</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+
+                    <div class="policy-section">
+                        <h6><i class="bi bi-check-circle-fill text-primary me-2"></i>How to Log Attendance</h6>
+                        <ol class="mb-0">
+                            <li>Type your name in the <strong>Employee Name</strong> field or select it from the list.</li>
+                            <li>Check that the <strong>Date</strong> is correct (auto-filled to today).</li>
+                            <li>Select your <strong>Status</strong> (e.g. Present, Late, Absent).</li>
+                            <li>Click the <strong>Time In</strong> field — your current time will be auto-filled and locked.</li>
+                            <li>Click <strong>Submit Attendance</strong> to save your Time In.</li>
+                            <li>At the end of your shift, select your name again — the form will switch to <strong>Time Out mode</strong> automatically.</li>
+                            <li>Click <strong>Submit Attendance</strong> again to save your Time Out.</li>
+                        </ol>
+                    </div>
+
+                    <div class="policy-section">
+                        <h6><i class="bi bi-exclamation-octagon-fill text-danger me-2"></i>Emergency / Early Out</h6>
+                        <ol class="mb-0">
+                            <li>Select your name (you must have a Time In record for today).</li>
+                            <li>Click the red <strong><i class="bi bi-exclamation-octagon-fill"></i></strong> button beside Time Out.</li>
+                            <li>Enter your time out and an optional reason.</li>
+                            <li>Click <strong>Confirm Emergency Out</strong>.</li>
+                            <li>When you return, select your name again and click <strong>Return</strong> to continue your shift.</li>
+                        </ol>
+                    </div>
+
+                    <div class="policy-section">
+                        <h6><i class="bi bi-shield-lock-fill text-secondary me-2"></i>How to Access Admin Panel</h6>
+                        <ol class="mb-0">
+                            <li>Click the <strong>Admin</strong> button at the top of the page.</li>
+                            <li>Enter the admin password when prompted.</li>
+                            <li>Once verified, the <strong>Attendance Monitor</strong> panel will appear.</li>
+                            <li>To exit admin view, click the <strong>Admin</strong> button again.</li>
+                        </ol>
+                    </div>
+
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Manual Modal -->
+    <div class="modal fade" id="adminManualModal" tabindex="-1" aria-labelledby="adminManualModalLabel">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="adminManualModalLabel"><i class="bi bi-book me-2"></i>Admin Manual</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+
+                    <div class="policy-section">
+                        <h6><i class="bi bi-person-plus-fill text-success me-2"></i>Adding an Employee</h6>
+                        <ol class="mb-0">
+                            <li>Click the <strong>Add Employee</strong> button (top right of the monitor).</li>
+                            <li>Enter the employee name.</li>
+                            <li>Set the <strong>Schedule Start</strong> and <strong>End Time</strong>.</li>
+                            <li>Check the <strong>working days</strong> (Mon–Sun).</li>
+                            <li>Optionally add <strong>Special Day Schedules</strong> or select a <strong>Schedule Note</strong> (Flex, With 1Hr OT, etc.).</li>
+                            <li>Click <strong>Save Employee</strong>.</li>
+                        </ol>
+                    </div>
+
+                    <div class="policy-section">
+                        <h6><i class="bi bi-calendar-week-fill text-info me-2"></i>Weekly Report</h6>
+                        <ol class="mb-0">
+                            <li>Click the <strong>Weekly Report</strong> button at the top of the monitor.</li>
+                            <li>Filter by a specific <strong>Date</strong> or enter a <strong>Week Number</strong> (1–4) to view that week's records.</li>
+                            <li>Click the <i class="bi bi-eye"></i> icon on any employee row to view their detailed daily attendance for that period.</li>
+                        </ol>
+                    </div>
+
+                    <div class="policy-section">
+                        <h6><i class="bi bi-three-dots-vertical text-dark me-2"></i>Employee Actions (Table)</h6>
+                        <ul class="mb-0">
+                            <li><i class="bi bi-pencil text-primary"></i> <strong>Edit</strong> — Update the employee's name, schedule, or working days.</li>
+                            <li><i class="bi bi-calendar3 text-info"></i> <strong>View Schedule</strong> — See the employee's full schedule details.</li>
+                            <li><i class="bi bi-trash text-danger"></i> <strong>Delete</strong> — Permanently remove the employee and all their attendance records.</li>
+                        </ul>
+                    </div>
+
+                    <div class="policy-section">
+                        <h6><i class="bi bi-arrow-clockwise text-danger me-2"></i>Reset Monthly Stats</h6>
+                        <ul class="mb-0">
+                            <li>Click the <strong>↺</strong> (reset) button beside Add Employee.</li>
+                            <li>This clears all attendance records on this device only.</li>
+                            <li><strong>Google Sheets data is NOT affected.</strong></li>
+                        </ul>
+                    </div>
+
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
         </div>
