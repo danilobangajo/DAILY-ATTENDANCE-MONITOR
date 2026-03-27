@@ -1,5 +1,5 @@
 // Configuration - Paste your Google Apps Script Web App URL here
-const GOOGLE_SHEETS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxsILduBI8_lTmNJIayauD-DAZ6lagSA1WjIfEm5-QWoP1e4Mnp9eFaC9uARCa7a-qE/exec';
+const GOOGLE_SHEETS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxvgcHqRzm6EBjl0dd1GUmx6a-l5wyPYTRK8QfJjTfmh38e5stJsieWKeT64HmiYbXn/exec';
 
 // Sync to Google Sheets
 async function syncToGoogleSheets(type, data) {
@@ -44,20 +44,26 @@ async function syncFullState() {
     for (const dept of ['rv', 'coms']) {
         const deptEmployees = allEmployees.filter(e => e.department === dept);
         const deptAttendance = allAttendance.filter(r => r.department === dept);
-        try {
-            await fetch(GOOGLE_SHEETS_WEB_APP_URL, {
-                method: 'POST',
-                mode: 'no-cors',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    type: 'fullState',
-                    department: dept,
-                    state: { employees: deptEmployees, attendanceData: deptAttendance }
-                })
-            });
-            console.log('✅ Full state synced for', dept);
-        } catch (e) {
-            console.error('❌ Full state sync error for', dept, e);
+        // Retry up to 3 times to ensure delete/edit propagates to remote
+        let success = false;
+        for (let attempt = 0; attempt < 3 && !success; attempt++) {
+            try {
+                await fetch(GOOGLE_SHEETS_WEB_APP_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        type: 'fullState',
+                        department: dept,
+                        state: { employees: deptEmployees, attendanceData: deptAttendance }
+                    })
+                });
+                success = true;
+                console.log('✅ Full state synced for', dept);
+            } catch (e) {
+                console.error(`❌ Full state sync error for ${dept} (attempt ${attempt + 1}):`, e);
+                if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+            }
         }
     }
 }

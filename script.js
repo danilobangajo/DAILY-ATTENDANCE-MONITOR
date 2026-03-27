@@ -838,7 +838,7 @@ function updateWeeklyReportWithFilter(selectedMonth = null, selectedYear = null,
             <td class="text-center fw-bold text-primary">${data.totalHours.toFixed(2)} hrs</td>
             <td class="text-center fw-bold text-success">${data.dates.length} day${data.dates.length !== 1 ? 's' : ''}</td>
             <td class="text-center">
-                <button class="btn btn-sm btn-outline-info" onclick="viewEmployeeDetails('${data.name}')" title="View Details"><i class="bi bi-eye"></i></button>
+                <button class="btn btn-sm btn-outline-info" onclick="viewEmployeeMonthDetails('${data.name}', ${selectedMonth}, ${selectedYear})" title="View Details"><i class="bi bi-eye"></i></button>
             </td>
         </tr>
     `}).join('');
@@ -1259,8 +1259,6 @@ document.getElementById('attendanceForm').addEventListener('submit', function(e)
         // If date picker has a value, refresh by date; otherwise default to today
         if (reportDatePicker && reportDatePicker.value) {
             updateWeeklyReportByDate();
-        } else if (weekNumberInput && weekNumberInput.value) {
-            updateWeeklyReportByWeek();
         } else {
             if (reportDatePicker) reportDatePicker.value = getLocalISODate();
             updateWeeklyReportByDate();
@@ -1538,7 +1536,7 @@ function editAttendanceRecord(recordId) {
 }
 
 // Delete attendance record
-function deleteAttendanceRecord(recordId, silent = false) {
+async function deleteAttendanceRecord(recordId, silent = false) {
     let attendanceData = loadAttendanceData();
     const deletedRecord = attendanceData.find(record => record.id === recordId);
     
@@ -1551,7 +1549,6 @@ function deleteAttendanceRecord(recordId, silent = false) {
     // Auto-refresh weekly report if modal is open
     const weeklyModal = document.getElementById('weeklyReportModal');
     if (weeklyModal && weeklyModal.classList.contains('show')) {
-        // Get current filters and refresh
         const monthYearSelect = document.getElementById('monthYearSelect');
         const weekFilter = document.getElementById('weekFilterModal');
         
@@ -1567,14 +1564,10 @@ function deleteAttendanceRecord(recordId, silent = false) {
                 updateWeeklyReportWithFilter(selectedMonth, year);
             }
         } else {
-            // Use current date filters
             const reportDatePicker = document.getElementById('reportDatePicker');
-            const weekNumberInput = document.getElementById('weekNumberInput');
             
             if (reportDatePicker && reportDatePicker.value) {
                 updateWeeklyReportByDate();
-            } else if (weekNumberInput && weekNumberInput.value) {
-                updateWeeklyReportByWeek();
             } else {
                 updateWeeklyReportWithFilter();
             }
@@ -1584,25 +1577,17 @@ function deleteAttendanceRecord(recordId, silent = false) {
     // Auto-refresh employee details modal if open
     const employeeModal = document.getElementById('employeeDetailsModal');
     if (employeeModal && employeeModal.classList.contains('show') && deletedRecord) {
-        // Close current modal and reopen with updated data
         const modal = bootstrap.Modal.getInstance(employeeModal);
         if (modal) {
             modal.hide();
-            // Small delay to ensure modal is closed before reopening
             setTimeout(() => {
                 viewEmployeeDetails(deletedRecord.name);
             }, 300);
         }
     }
     
-    // Force complete sync to Google Sheets after deletion
-    if (deletedRecord) {
-        syncToGoogleSheets('forceSync', { 
-            employeeName: deletedRecord.name,
-            deletedDate: deletedRecord.date,
-            action: 'deleteRecord'
-        });
-    }
+    // Sync deleted state to Google Sheets FIRST, then notify
+    await syncFullState();
     syncDashboardToSheets();
     syncWeeklyReportToSheets();
     
@@ -1617,7 +1602,6 @@ function viewEmployeeDetails(employeeName) {
     
     // Get selected date or week from the new filters
     const reportDatePicker = document.getElementById('reportDatePicker');
-    const weekNumberInput = document.getElementById('weekNumberInput');
     
     let filteredRecords = [];
     let periodText = '';
@@ -1632,31 +1616,6 @@ function viewEmployeeDetails(employeeName) {
         const date = new Date(selectedDate + 'T00:00:00');
         const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
         periodText = date.toLocaleDateString('en-US', options);
-        
-    } else if (weekNumberInput && weekNumberInput.value) {
-        // Filter by selected week
-        const weekNumber = parseInt(weekNumberInput.value);
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = now.getMonth();
-        
-        // Calculate week range
-        const startDay = (weekNumber - 1) * 7 + 1;
-        const endDay = Math.min(weekNumber * 7, new Date(year, month + 1, 0).getDate());
-        
-        filteredRecords = attendanceData.filter(r => {
-            if (r.name !== employeeName || r.department !== currentDepartment) return false;
-            
-            const recordDate = new Date(r.date + 'T00:00:00');
-            const recordDay = recordDate.getDate();
-            const recordMonth = recordDate.getMonth();
-            const recordYear = recordDate.getFullYear();
-            
-            return recordYear === year && recordMonth === month && recordDay >= startDay && recordDay <= endDay;
-        });
-        
-        const monthName = now.toLocaleDateString('en-US', { month: 'long' });
-        periodText = `Week ${weekNumber} (${monthName} ${startDay}-${endDay}, ${year})`;
         
     } else {
         // No filter selected, show current month
@@ -1916,15 +1875,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Time Out is NEVER enabled from status change — only enabled when existing record found
     });
     
-    // Refresh weekly report when modal opens — default to today's date
+    // Refresh weekly report when modal opens — show current month by default
     const weeklyReportModal = document.getElementById('weeklyReportModal');
     if (weeklyReportModal) {
         weeklyReportModal.addEventListener('show.bs.modal', function() {
-            const today = getLocalISODate();
-            const reportDatePicker = document.getElementById('reportDatePicker');
-            if (reportDatePicker) reportDatePicker.value = today;
-            document.getElementById('weekNumberInput').value = '';
-            updateWeeklyReportByDate();
+            document.getElementById('reportDatePicker').value = '';
+            showCurrentMonthSummary();
         });
     }
 });
@@ -1985,18 +1941,267 @@ function updateWeeklyReportCurrentWeek(weekStart, weekEnd) {
     `).join('');
 }
 
+// Show current month summary (default view when Weekly Report opens)
+function showCurrentMonthSummary() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const monthName = now.toLocaleDateString('en-US', { month: 'long' });
+
+    const dateElement = document.getElementById('selectedDateModal');
+    if (dateElement) dateElement.textContent = `${monthName} ${year} — Monthly Summary`;
+
+    const modalTableBody = document.getElementById('weeklyReportTableModal');
+    if (!modalTableBody) return;
+
+    const attendanceData = loadAttendanceData();
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+
+    const filteredData = attendanceData.filter(r => {
+        if (r.department !== currentDepartment) return false;
+        const d = new Date(r.date + 'T00:00:00');
+        return d.getMonth() === month && d.getFullYear() === year;
+    });
+
+    if (filteredData.length === 0) {
+        modalTableBody.innerHTML = `
+            <tr><td colspan="5" class="text-center text-muted py-4">
+                <i class="bi bi-inbox fs-1 d-block mb-2"></i>No attendance records for ${monthName} ${year}
+            </td></tr>`;
+        return;
+    }
+
+    // Group by employee, accumulate total hours and unique days
+    const empMap = {};
+    filteredData.forEach(r => {
+        if (!empMap[r.name]) {
+            const emp = employees.find(e => e.name === r.name && e.department === currentDepartment);
+            empMap[r.name] = { name: r.name, scheduleDisplay: emp ? emp.scheduleDisplay : 'Not Set', totalHours: 0, dates: new Set() };
+        }
+        empMap[r.name].totalHours += parseFloat(r.totalHours || 0);
+        if (r.status !== 'Work From Home') empMap[r.name].dates.add(r.date);
+    });
+
+    modalTableBody.innerHTML = Object.values(empMap)
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map(d => `
+        <tr>
+            <td><strong>${d.name}</strong></td>
+            <td><span class="badge bg-info text-dark">${d.scheduleDisplay}</span></td>
+            <td class="text-center fw-bold text-primary">${d.totalHours.toFixed(2)} hrs</td>
+            <td class="text-center fw-bold text-success">${d.dates.size} day${d.dates.size !== 1 ? 's' : ''}</td>
+            <td class="text-center"><button class="btn btn-sm btn-outline-info" onclick="viewEmployeeMonthDetails('${d.name}', ${month}, ${year})" title="View Details"><i class="bi bi-eye"></i></button></td>
+        </tr>`).join('');
+}
+
+// View employee full month attendance details
+function viewEmployeeMonthDetails(employeeName, month, year) {
+    const attendanceData = loadAttendanceData();
+    const monthName = new Date(year, month, 1).toLocaleDateString('en-US', { month: 'long' });
+
+    let records = attendanceData.filter(r => {
+        if (r.name !== employeeName || r.department !== currentDepartment) return false;
+        const d = new Date(r.date + 'T00:00:00');
+        return d.getMonth() === month && d.getFullYear() === year;
+    });
+
+    if (records.length === 0) {
+        showNotification(`No records for ${employeeName} in ${monthName} ${year}`, 'info');
+        return;
+    }
+
+    // Deduplicate by date (keep latest id)
+    records.sort((a, b) => new Date(a.date) - new Date(b.date) || b.id - a.id);
+    const seen = new Set();
+    records = records.filter(r => { if (seen.has(r.date)) return false; seen.add(r.date); return true; });
+
+    const existing = document.getElementById('employeeDetailsModal');
+    if (existing) existing.remove();
+
+    const modalDiv = document.createElement('div');
+    modalDiv.className = 'modal fade';
+    modalDiv.id = 'employeeDetailsModal';
+    modalDiv.tabIndex = -1;
+    // Calculate week ranges for this month
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const weeks = [];
+    for (let w = 1; w <= 4; w++) {
+        const startDay = (w - 1) * 7 + 1;
+        const endDay = Math.min(w * 7, daysInMonth);
+        if (startDay <= daysInMonth) weeks.push({ w, startDay, endDay });
+    }
+
+    modalDiv.innerHTML = `
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 class="modal-title"><i class="bi bi-person-circle me-2"></i>${employeeName} — Attendance Details</h5>
+                        <p class="text-muted mb-0" style="font-size:0.9rem" id="detailsModalPeriodLabel">${monthName} ${year}</p>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        <label class="mb-0 small fw-semibold">Week</label>
+                        <input type="number" class="form-control form-control-sm" id="detailWeekInput" placeholder="1-${weeks.length}" min="0" max="${weeks.length}" style="width:80px" oninput="filterDetailWeek(this, '${employeeName}', ${month}, ${year})">
+                        <span class="text-muted small" id="detailWeekLabel"></span>
+                    </div>
+                    <table class="table table-hover table-bordered">
+                        <thead><tr><th>Date</th><th>Status</th><th>Time In</th><th>Time Out</th><th>Total Hours</th><th class="text-center">Actions</th></tr></thead>
+                        <tbody id="detailsModalBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>`;
+    document.body.appendChild(modalDiv);
+
+    modalDiv.addEventListener('hide.bs.modal', () => { if (document.activeElement && modalDiv.contains(document.activeElement)) document.activeElement.blur(); });
+
+    const tbody = document.getElementById('detailsModalBody');
+    records.forEach(r => {
+        const safeRId = parseInt(r.id, 10);
+        const tr = document.createElement('tr');
+        const fmtDate = new Date(r.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+        const tdDate = document.createElement('td'); tdDate.textContent = fmtDate;
+
+        const tdStatus = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = `badge-status ${getStatusBadgeClass(r.status)}`;
+        badge.textContent = r.status;
+        tdStatus.appendChild(badge);
+
+        const tdIn = document.createElement('td'); tdIn.textContent = formatTime(r.timeIn);
+        const tdOut = document.createElement('td'); tdOut.textContent = formatTime(r.timeOut);
+        const tdHrs = document.createElement('td'); tdHrs.className = 'fw-bold'; tdHrs.textContent = `${r.totalHours || 0} hrs`;
+
+        const tdActions = document.createElement('td');
+        tdActions.className = 'text-center';
+
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn btn-sm btn-outline-primary';
+        editBtn.title = 'Edit';
+        editBtn.innerHTML = '<i class="bi bi-pencil"></i>';
+        editBtn.addEventListener('click', () => editAttendanceRecord(safeRId));
+        tdActions.appendChild(editBtn);
+
+        const reasonText = r.reason || r.attendanceReason || '';
+        if (reasonText) {
+            const reasonBtn = document.createElement('button');
+            reasonBtn.className = 'btn btn-sm btn-outline-warning ms-1';
+            reasonBtn.title = 'View Reason';
+            reasonBtn.innerHTML = '<i class="bi bi-chat-left-text"></i>';
+            reasonBtn.addEventListener('click', () => showReasonModal(reasonText, fmtDate));
+            tdActions.appendChild(reasonBtn);
+        }
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-sm btn-outline-danger ms-1';
+        delBtn.title = 'Delete';
+        delBtn.innerHTML = '<i class="bi bi-trash"></i>';
+        delBtn.addEventListener('click', () => deleteAttendanceRecord(safeRId));
+        tdActions.appendChild(delBtn);
+
+        tr.append(tdDate, tdStatus, tdIn, tdOut, tdHrs, tdActions);
+        tbody.appendChild(tr);
+    });
+
+    new bootstrap.Modal(modalDiv).show();
+}
+
+// Filter attendance detail modal by week
+function filterDetailWeek(input, employeeName, month, year) {
+    const weekNumber = parseInt(input.value) || 0;
+    const attendanceData = loadAttendanceData();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    let records = attendanceData.filter(r => {
+        if (r.name !== employeeName || r.department !== currentDepartment) return false;
+        const d = new Date(r.date + 'T00:00:00');
+        if (d.getMonth() !== month || d.getFullYear() !== year) return false;
+        if (!weekNumber) return true;
+        const day = d.getDate();
+        const startDay = (weekNumber - 1) * 7 + 1;
+        const endDay = Math.min(weekNumber * 7, daysInMonth);
+        return day >= startDay && day <= endDay;
+    });
+
+    records.sort((a, b) => new Date(a.date) - new Date(b.date) || b.id - a.id);
+    const seen = new Set();
+    records = records.filter(r => { if (seen.has(r.date)) return false; seen.add(r.date); return true; });
+
+    const monthName = new Date(year, month, 1).toLocaleDateString('en-US', { month: 'long' });
+    const periodLabel = document.getElementById('detailsModalPeriodLabel');
+    const weekLabel = document.getElementById('detailWeekLabel');
+    if (periodLabel) {
+        if (!weekNumber) {
+            periodLabel.textContent = `${monthName} ${year}`;
+            if (weekLabel) weekLabel.textContent = 'All';
+        } else {
+            const startDay = (weekNumber - 1) * 7 + 1;
+            const endDay = Math.min(weekNumber * 7, daysInMonth);
+            periodLabel.textContent = `Week ${weekNumber} — ${monthName} ${startDay}-${endDay}, ${year}`;
+            if (weekLabel) weekLabel.textContent = `${monthName} ${startDay}–${endDay}`;
+        }
+    }
+
+    const tbody = document.getElementById('detailsModalBody');
+    tbody.innerHTML = '';
+    if (records.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-3"><i class="bi bi-inbox fs-4 d-block mb-1"></i>No records</td></tr>`;
+        return;
+    }
+    records.forEach(r => {
+        const safeRId = parseInt(r.id, 10);
+        const tr = document.createElement('tr');
+        const fmtDate = new Date(r.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+        const tdDate = document.createElement('td'); tdDate.textContent = fmtDate;
+        const tdStatus = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = `badge-status ${getStatusBadgeClass(r.status)}`;
+        badge.textContent = r.status;
+        tdStatus.appendChild(badge);
+        const tdIn = document.createElement('td'); tdIn.textContent = formatTime(r.timeIn);
+        const tdOut = document.createElement('td'); tdOut.textContent = formatTime(r.timeOut);
+        const tdHrs = document.createElement('td'); tdHrs.className = 'fw-bold'; tdHrs.textContent = `${r.totalHours || 0} hrs`;
+        const tdActions = document.createElement('td'); tdActions.className = 'text-center';
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn btn-sm btn-outline-primary'; editBtn.title = 'Edit';
+        editBtn.innerHTML = '<i class="bi bi-pencil"></i>';
+        editBtn.addEventListener('click', () => editAttendanceRecord(safeRId));
+        tdActions.appendChild(editBtn);
+        const reasonText = r.reason || r.attendanceReason || '';
+        if (reasonText) {
+            const reasonBtn = document.createElement('button');
+            reasonBtn.className = 'btn btn-sm btn-outline-warning ms-1'; reasonBtn.title = 'View Reason';
+            reasonBtn.innerHTML = '<i class="bi bi-chat-left-text"></i>';
+            reasonBtn.addEventListener('click', () => showReasonModal(reasonText, fmtDate));
+            tdActions.appendChild(reasonBtn);
+        }
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-sm btn-outline-danger ms-1'; delBtn.title = 'Delete';
+        delBtn.innerHTML = '<i class="bi bi-trash"></i>';
+        delBtn.addEventListener('click', () => deleteAttendanceRecord(safeRId));
+        tdActions.appendChild(delBtn);
+        tr.append(tdDate, tdStatus, tdIn, tdOut, tdHrs, tdActions);
+        tbody.appendChild(tr);
+    });
+}
+
 // Update weekly report by selected date from date picker
 function updateWeeklyReportByDate() {
     const datePicker = document.getElementById('reportDatePicker');
     const selectedDate = datePicker.value;
-    
+
     if (!selectedDate) {
-        clearWeeklyReportDisplay();
+        showCurrentMonthSummary();
         return;
     }
     
     // Clear week number input when date is selected
-    document.getElementById('weekNumberInput').value = '';
+    const weekNumEl = document.getElementById('weekNumberInput');
+    if (weekNumEl) weekNumEl.value = '';
     
     const date = new Date(selectedDate + 'T00:00:00');
     const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
