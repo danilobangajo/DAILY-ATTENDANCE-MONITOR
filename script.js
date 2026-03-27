@@ -403,6 +403,18 @@ function selectSchedNote(btn, groupId) {
     btn.classList.add('active');
 }
 
+function applyFloatSchedule(startId, endId, specialListId) {
+    document.getElementById(startId).value = '';
+    document.getElementById(endId).value = '';
+    document.getElementById(specialListId).innerHTML = '';
+    // Uncheck all weekly days
+    const prefix = startId === 'scheduleStart' ? 'day' : 'editDay';
+    ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d => {
+        const cb = document.getElementById(prefix + d);
+        if (cb) cb.checked = false;
+    });
+}
+
 const DAYS_OF_WEEK = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
 function getDayCheckboxId(containerId, day) {
@@ -490,8 +502,11 @@ function saveEmployee() {
     });
     
     if (!name || !scheduleStart || !scheduleEnd || days.length === 0) {
-        showNotification('Please fill all fields and select at least one day', 'warning');
-        return;
+        const isFloat = (document.querySelector('#snBtnGroup .sn-btn.active')?.dataset.value || '').toUpperCase() === 'FLOAT';
+        if (!name || (!isFloat && (!scheduleStart || !scheduleEnd || days.length === 0))) {
+            showNotification('Please fill all fields and select at least one day', 'warning');
+            return;
+        }
     }
     
     // Format time
@@ -1353,20 +1368,12 @@ function saveEditEmployee() {
     });
     
     if (!name || !scheduleStart || !scheduleEnd || days.length === 0) {
-        showNotification('Please fill all fields', 'warning');
-        return;
+        const isFloat = (document.querySelector('#esnBtnGroup .sn-btn.active')?.dataset.value || '').toUpperCase() === 'FLOAT';
+        if (!name || (!isFloat && (!scheduleStart || !scheduleEnd || days.length === 0))) {
+            showNotification('Please fill all fields', 'warning');
+            return;
+        }
     }
-    
-    const formatTime = (time) => {
-        const [hours, minutes] = time.split(':');
-        const hour = parseInt(hours);
-        const ampm = hour >= 12 ? 'PM' : 'AM';
-        const displayHour = hour % 12 || 12;
-        return `${displayHour}:${minutes} ${ampm}`;
-    };
-    
-    const employees = JSON.parse(storage.getItem('employees') || '[]');
-    const index = employees.findIndex(e => e.id == empId);
     
     if (index !== -1) {
         employees[index] = {
