@@ -1360,42 +1360,50 @@ function saveEditEmployee() {
     const scheduleStart = document.getElementById('editScheduleStart').value;
     const scheduleEnd = document.getElementById('editScheduleEnd').value;
     const scheduleNotes = document.querySelector('#esnBtnGroup .sn-btn.active')?.dataset.value || '';
-    
+    const isFloat = scheduleNotes.toUpperCase() === 'FLOAT';
+
     const days = [];
     ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach(day => {
         const checkbox = document.getElementById('editDay' + day);
         if (checkbox.checked) days.push(day);
     });
-    
-    if (!name || !scheduleStart || !scheduleEnd || days.length === 0) {
-        const isFloat = (document.querySelector('#esnBtnGroup .sn-btn.active')?.dataset.value || '').toUpperCase() === 'FLOAT';
-        if (!name || (!isFloat && (!scheduleStart || !scheduleEnd || days.length === 0))) {
-            showNotification('Please fill all fields', 'warning');
-            return;
-        }
+
+    if (!name || (!isFloat && (!scheduleStart || !scheduleEnd || days.length === 0))) {
+        showNotification('Please fill all fields', 'warning');
+        return;
     }
-    
+
+    const fmtT = (time) => {
+        if (!time) return '';
+        const [hours, minutes] = time.split(':');
+        const hour = parseInt(hours);
+        const ampm = hour >= 12 ? 'PM' : 'AM';
+        return `${hour % 12 || 12}:${minutes} ${ampm}`;
+    };
+
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    const index = employees.findIndex(e => e.id == empId);
+
     if (index !== -1) {
         employees[index] = {
             ...employees[index],
             name: name,
             scheduleStart: scheduleStart,
             scheduleEnd: scheduleEnd,
-            scheduleDisplay: `${formatTime(scheduleStart)} - ${formatTime(scheduleEnd)}`,
+            scheduleDisplay: isFloat ? 'Float' : `${fmtT(scheduleStart)} - ${fmtT(scheduleEnd)}`,
             scheduleNotes: scheduleNotes,
-            weeklyDays: days.join(', '),
+            weeklyDays: days.join(', ') || '',
             specialDays: getSpecialDays('editSpecialDaysList')
         };
         storage.setItem('employees', JSON.stringify(employees));
     }
-    
+
     document.activeElement?.blur();
     const modal = bootstrap.Modal.getInstance(document.getElementById('editEmployeeModal'));
     modal.hide();
     updateDashboard();
     showNotification('Employee updated successfully!', 'success');
-    
-    // Sync to Google Sheets
+
     syncDashboardToSheets();
     syncFullState();
 }
