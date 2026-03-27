@@ -1466,7 +1466,15 @@ async function deleteEmployee() {
         saveAttendanceData(attendanceData);
     }
 
-    // Sync full state first so server reflects the deletion before UI updates
+    // 1. Tell Google Sheets to delete the employee row + all their daily records
+    if (employeeName && employeeDept) {
+        await syncToGoogleSheets('deleteEmployee', {
+            employeeName: employeeName,
+            department: employeeDept
+        });
+    }
+
+    // 2. Sync full state so all devices get the updated list
     await syncFullState();
     
     document.activeElement?.blur();

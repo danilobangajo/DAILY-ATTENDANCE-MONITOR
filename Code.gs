@@ -255,7 +255,9 @@ function doPost(e) {
       }
       updateWeeklyReport(sheet, data.records);
     }
-    if (data.type === 'deleteEmployee') deleteEmployeeData(sheet, data.employeeName);
+    if (data.type === 'deleteEmployee' && data.employeeName) {
+      deleteEmployeeFromAllBlocks(sheet, data.employeeName);
+    }
     if (data.type === 'forceSync' && (data.action === 'deleteEmployee' || data.action === 'deleteRecord')) {
       clearEmployeeWeeklyData(sheet, data.employeeName);
     }
@@ -439,6 +441,30 @@ function updateWeeklyReport(sheet, records) {
     });
 
     Logger.log('Weekly written: ' + mk + ' — ' + empRows.length + ' employees');
+  });
+}
+
+// ── deleteEmployeeFromAllBlocks ──────────────────────────────
+// Deletes the employee row in EVERY month block (removes row entirely)
+// so both the stat columns and daily columns are gone.
+
+function deleteEmployeeFromAllBlocks(sheet, employeeName) {
+  if (!employeeName) return;
+  const isRV    = sheet.getName() === 'RV';
+  const nameCol = 1 + getDashHeaders(isRV).length; // 12 for RV, 10 for COMS
+
+  // Collect rows to delete (descending order so row indices stay valid)
+  const rowsToDelete = [];
+  findMonthBlocks(sheet).forEach(block => {
+    getEmpRowsInBlock(sheet, block.startRow, nameCol).forEach(({ name, row }) => {
+      if (name.trim() === employeeName.trim()) rowsToDelete.push(row);
+    });
+  });
+
+  // Delete from bottom to top
+  rowsToDelete.sort((a, b) => b - a).forEach(row => {
+    sheet.deleteRow(row);
+    Logger.log('Deleted employee row ' + row + ': ' + employeeName);
   });
 }
 
