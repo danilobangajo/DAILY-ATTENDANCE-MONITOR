@@ -368,6 +368,9 @@ function applyDashFormatting(sheet, row, emp, isRV) {
   if ((emp.wfh || 0) > 0)
     sheet.getRange(row, isRV ? 10 : 8).setBackground('#D1FAE5').setFontColor('#065f46').setFontWeight('bold');
 
+  if ((emp.overtime || 0) > 0)
+    sheet.getRange(row, isRV ? 7 : null).setBackground('#FDE68A').setFontColor('#78350f').setFontWeight('bold');
+
   const aColor = getAWOLColor(emp.awol || 0);
   if (aColor) {
     const ac = sheet.getRange(row, isRV ? 8 : 6);
@@ -648,6 +651,7 @@ function getStatusInfo(status) {
     'Absent':             { bg: '#FCA5A5', text: '#7f1d1d', code: 'A'    },
     'Late':               { bg: '#FED7AA', text: '#7c2d12', code: 'L'    },
     'Undertime':          { bg: '#E9D5FF', text: '#581c87', code: 'UT'   },
+    'Overtime':           { bg: '#FDE68A', text: '#78350f', code: 'OT'   },
     'AWOL':               { bg: '#FCA5A5', text: '#7f1d1d', code: 'AWOL' },
     'Sick Leave':         { bg: '#BFDBFE', text: '#1e3a8a', code: 'SL'   },
     'No Schedule':        { bg: '#BFDBFE', text: '#1e3a8a', code: 'NS'   },

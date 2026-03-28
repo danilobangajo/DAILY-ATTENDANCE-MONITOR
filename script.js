@@ -236,8 +236,17 @@ function updateEmployeeDatalist() {
     const departmentEmployees = employees.filter(emp => emp.department === currentDepartment);
     
     // Get today's time in records (without timeout)
+    // Also include previous day for overnight shifts (e.g. 7AM-1AM)
+    const prevDay = (() => {
+        const d = new Date(today + 'T00:00:00');
+        d.setDate(d.getDate() - 1);
+        const y = d.getFullYear();
+        const mo = String(d.getMonth() + 1).padStart(2, '0');
+        const dy = String(d.getDate()).padStart(2, '0');
+        return `${y}-${mo}-${dy}`;
+    })();
     const todayTimeInRecords = attendanceData.filter(record => 
-        record.date === today && 
+        (record.date === today || record.date === prevDay) && 
         record.department === currentDepartment && 
         record.timeIn && 
         !record.timeOut
@@ -1083,10 +1092,31 @@ document.getElementById('attendanceForm').addEventListener('submit', function(e)
 
     let attendanceData = loadAttendanceData();
 
+    // --- Overnight early-arrival correction ---
+    // If schedule starts at midnight or early morning (00:00–05:59) and the employee
+    // logs in late at night (20:00–23:59) on the form date, they are actually arriving
+    // early for the NEXT day's shift. Shift the record date forward by 1 day.
+    let recordDate = date;
+    if (employee && employee.scheduleStart && status === 'Present' && timeIn && !existingRecordId) {
+        const [schedH] = employee.scheduleStart.split(':').map(Number);
+        const [timeH] = timeIn.split(':').map(Number);
+        // Schedule starts between midnight and 6 AM, and time-in is 8 PM or later
+        if (schedH >= 0 && schedH < 6 && timeH >= 20) {
+            const nextDay = new Date(date + 'T00:00:00');
+            nextDay.setDate(nextDay.getDate() + 1);
+            const y = nextDay.getFullYear();
+            const mo = String(nextDay.getMonth() + 1).padStart(2, '0');
+            const dy = String(nextDay.getDate()).padStart(2, '0');
+            recordDate = `${y}-${mo}-${dy}`;
+            // Also update the form date input so subsequent logic uses the correct date
+            document.getElementById('attendanceDate').value = recordDate;
+        }
+    }
+
     // Auto-detect late if status is Present
     // Skip late detection if employee already has a record today (returning from break)
     const existingTodayRecord = attendanceData.find(r => 
-        r.name === name && r.date === date && r.department === currentDepartment
+        r.name === name && r.date === recordDate && r.department === currentDepartment
     );
 
     const notes = employee && employee.scheduleNotes ? employee.scheduleNotes.toUpperCase() : '';
@@ -1110,12 +1140,19 @@ document.getElementById('attendanceForm').addEventListener('submit', function(e)
     }
 
     if (status === 'Present' && timeIn && employee && employee.scheduleStart && !existingTodayRecord && !isFlex) {
-        const daySched = getScheduleForDate(employee, date);
+        const daySched = getScheduleForDate(employee, recordDate);
         const [schedHours, schedMins] = daySched.start.split(':').map(Number);
         const [timeHours, timeMins] = timeIn.split(':').map(Number);
         
-        const schedMinutes = schedHours * 60 + schedMins;
-        const timeMinutes = timeHours * 60 + timeMins;
+        let schedMinutes = schedHours * 60 + schedMins;
+        let timeMinutes = timeHours * 60 + timeMins;
+        // For midnight-start schedules (00:00-05:59), a late-night time-in (20:00+)
+        // means the employee arrived early for the next day — treat as negative late (early)
+        if (schedHours < 6 && timeHours >= 20) {
+            // time-in is on the previous calendar day relative to schedule
+            // e.g. 23:51 vs 00:00 → employee is 9 mins early, not 1431 mins late
+            timeMinutes = timeMinutes - 24 * 60; // shift back to make it negative
+        }
         lateMinutes = timeMinutes - schedMinutes;
         
         if (lateMinutes >= 11) {
@@ -1144,7 +1181,7 @@ document.getElementById('attendanceForm').addEventListener('submit', function(e)
     // Also check for any existing record on the same date (catches early-out re-submit)
     if (!existingRecordId) {
         const sameDay = attendanceData.find(r =>
-            r.name === name && r.date === date && r.department === currentDepartment
+            r.name === name && r.date === recordDate && r.department === currentDepartment
         );
         if (sameDay && status === 'Undertime') {
             // Update the existing record instead of creating a duplicate
@@ -1210,7 +1247,7 @@ document.getElementById('attendanceForm').addEventListener('submit', function(e)
         const newRecord = {
             id: Date.now(),
             name: name,
-            date: date,
+            date: recordDate,
             status: status,
             timeIn: timeIn,
             timeOut: timeOut,
@@ -2647,18 +2684,28 @@ function addEmployeeNameListener() {
         }
         
         // Check for existing record with no timeout (normal flow)
+        // Also check previous day for overnight shifts (e.g. 7AM-1AM spanning midnight)
+        const prevDate = (() => {
+            const d = new Date(selectedDate + 'T00:00:00');
+            d.setDate(d.getDate() - 1);
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        })();
         const existingRecord = attendanceData.find(record => 
             record.name === selectedName && 
-            record.date === selectedDate && 
+            (record.date === selectedDate || record.date === prevDate) && 
             record.department === currentDepartment && 
             record.timeIn && 
             !record.timeOut
         );
 
         // Check for early-out record (has timeOut but marked as Undertime/Early Out)
+        // Also check previous day for overnight shifts
         const earlyOutRecord = attendanceData.find(record =>
             record.name === selectedName &&
-            record.date === selectedDate &&
+            (record.date === selectedDate || record.date === prevDate) &&
             record.department === currentDepartment &&
             record.timeIn &&
             record.timeOut &&
@@ -2690,6 +2737,11 @@ function addEmployeeNameListener() {
             submitBtn.style.opacity = '1';
             employeeNameInput.setAttribute('data-existing-record-id', existingRecord.id);
             employeeNameInput.removeAttribute('data-early-out-record-id');
+            // For overnight shifts: sync the date input to the record's actual date
+            // so the form submit updates the correct record
+            if (existingRecord.date !== selectedDate) {
+                dateInput.value = existingRecord.date;
+            }
             if (earlyOutBtn) earlyOutBtn.style.display = 'inline-flex';
             if (returnWorkBtn) returnWorkBtn.style.display = 'none';
             if (returnSection) returnSection.style.display = 'none';
