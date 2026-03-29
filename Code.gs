@@ -292,7 +292,7 @@ function updateDashboard(sheet, employees) {
   const isRV       = sheet.getName() === 'RV';
   const dashHdrs   = getDashHeaders(isRV);
   const dashCount  = dashHdrs.length;
-  const nameCol    = 1 + dashCount; // 1-based: col B=2, so nameCol = dashCount+1
+  const nameCol    = 1 + dashCount;
 
   const now   = new Date();
   const block = getOrCreateBlock(sheet, now.getFullYear(), now.getMonth(), isRV);
@@ -300,10 +300,11 @@ function updateDashboard(sheet, employees) {
 
   employees.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
-  // Clear only the dashboard stat columns in this block's data rows
-  const lastRow = sheet.getLastRow();
-  if (lastRow >= dataStart) {
-    sheet.getRange(dataStart, 2, lastRow - dataStart + 1, dashCount)
+  // Get existing rows in this block to detect how many rows to clear
+  const existingRows = getEmpRowsInBlock(sheet, block.startRow, nameCol);
+  const clearCount = Math.max(employees.length, existingRows.length);
+  if (clearCount > 0) {
+    sheet.getRange(dataStart, 2, clearCount, dashCount)
       .clearContent().clearFormat();
   }
 
@@ -317,6 +318,7 @@ function updateDashboard(sheet, employees) {
 }
 
 function writeDashRow(sheet, row, emp, isRV) {
+  const schedDisplay = emp.scheduleDisplay || '';
   if (isRV) {
     sheet.getRange(row, 2).setValue(emp.present    || 0);
     sheet.getRange(row, 3).setValue(emp.absent     || 0);
@@ -327,7 +329,7 @@ function writeDashRow(sheet, row, emp, isRV) {
     sheet.getRange(row, 8).setValue(emp.awol       || 0);
     sheet.getRange(row, 9).setValue(emp.sickLeave  || 0);
     sheet.getRange(row, 10).setValue(emp.wfh       || 0);
-    sheet.getRange(row, 11).setValue(emp.scheduleDisplay || '');
+    sheet.getRange(row, 11).setValue(schedDisplay);
     sheet.getRange(row, 12).setValue(emp.name      || '').setFontWeight('bold');
   } else {
     sheet.getRange(row, 2).setValue(emp.present    || 0);
@@ -337,7 +339,7 @@ function writeDashRow(sheet, row, emp, isRV) {
     sheet.getRange(row, 6).setValue(emp.awol       || 0);
     sheet.getRange(row, 7).setValue(emp.sickLeave  || 0);
     sheet.getRange(row, 8).setValue(emp.wfh        || 0);
-    sheet.getRange(row, 9).setValue(emp.scheduleDisplay || '');
+    sheet.getRange(row, 9).setValue(schedDisplay);
     sheet.getRange(row, 10).setValue(emp.name      || '').setFontWeight('bold');
   }
 }
@@ -368,8 +370,8 @@ function applyDashFormatting(sheet, row, emp, isRV) {
   if ((emp.wfh || 0) > 0)
     sheet.getRange(row, isRV ? 10 : 8).setBackground('#D1FAE5').setFontColor('#065f46').setFontWeight('bold');
 
-  if ((emp.overtime || 0) > 0)
-    sheet.getRange(row, isRV ? 7 : null).setBackground('#FDE68A').setFontColor('#78350f').setFontWeight('bold');
+  if (isRV && (emp.overtime || 0) > 0)
+    sheet.getRange(row, 7).setBackground('#FDE68A').setFontColor('#78350f').setFontWeight('bold');
 
   const aColor = getAWOLColor(emp.awol || 0);
   if (aColor) {
@@ -407,7 +409,7 @@ function buildDashStats(employees, attendanceData, dept) {
     else if (r.status === 'Absent')    s.absent++;
     else if (r.status === 'Late')      { s.late++; s.totalLates += r.lateMinutes || 15; }
     else if (r.status === 'Undertime') s.undertime++;
-    else if (r.status === 'Overtime')  s.overtime++;
+    else if (r.status === 'Overtime')  { if (dept === 'rv') s.overtime++; else s.present++; }
     else if (r.status === 'AWOL')      s.awol++;
     else if (r.status === 'Sick Leave') s.sickLeave++;
     else if (r.status === 'Work From Home') s.wfh++;
@@ -512,14 +514,51 @@ function updateWeeklyReport(sheet, records) {
     byMonth[mk][r.name][r.date] = r;
   });
 
+  // Load saved state to fill in missing employee rows
+  const dept = sheet.getName().toLowerCase();
+  const props = PropertiesService.getScriptProperties();
+  const stateJson = props.getProperty('appdata_' + dept);
+  const savedEmployees = stateJson ? (JSON.parse(stateJson).employees || []) : [];
+
   Object.keys(byMonth).forEach(mk => {
     const [y, mo]  = mk.split('-').map(Number);
     const block    = getOrCreateBlock(sheet, y, mo, isRV);
-    const dataStart = block.startRow + 3;
     const daysInMonth  = new Date(y, mo + 1, 0).getDate();
     const dailyStartCol = 2 + dashCount;
 
-    const empRows = getEmpRowsInBlock(sheet, block.startRow, nameCol);
+    // Ensure all employees with records in this month exist as rows in the block
+    let empRows = getEmpRowsInBlock(sheet, block.startRow, nameCol);
+    const existingNames = new Set(empRows.map(e => e.name));
+    const missingNames = Object.keys(byMonth[mk]).filter(n => !existingNames.has(n));
+    if (missingNames.length > 0) {
+      // Rebuild full sorted list with current stats preserved for existing employees
+      const allNames = [...existingNames, ...missingNames].sort((a, b) => a.localeCompare(b));
+      const dataStart = block.startRow + 3;
+      // Read existing stats before clearing
+      const existingStats = {};
+      empRows.forEach(({ name, row }) => {
+        const vals = sheet.getRange(row, 2, 1, dashCount).getValues()[0];
+        existingStats[name] = vals;
+      });
+      // Clear all rows for this block
+      sheet.getRange(dataStart, 2, allNames.length + existingNames.size, dashCount).clearContent().clearFormat();
+      // Rewrite all rows in sorted order
+      allNames.forEach((n, i) => {
+        const row = dataStart + i;
+        if (existingStats[n]) {
+          sheet.getRange(row, 2, 1, dashCount).setValues([existingStats[n]]);
+          const emp = savedEmployees.find(e => e.name === n);
+          const statsObj = { name: n, present: existingStats[n][0]||0, absent: existingStats[n][1]||0, late: existingStats[n][2]||0, undertime: isRV ? existingStats[n][4]||0 : existingStats[n][3]||0, awol: isRV ? existingStats[n][6]||0 : existingStats[n][4]||0, sickLeave: isRV ? existingStats[n][7]||0 : existingStats[n][5]||0, wfh: isRV ? existingStats[n][8]||0 : existingStats[n][6]||0, overtime: isRV ? existingStats[n][5]||0 : 0 };
+          applyDashFormatting(sheet, row, statsObj, isRV);
+        } else {
+          const emp = savedEmployees.find(e => e.name === n);
+          const blankEmp = { name: n, present:0, absent:0, late:0, totalLates:0, undertime:0, overtime:0, awol:0, sickLeave:0, wfh:0, scheduleDisplay: emp ? (emp.scheduleDisplay || '') : '' };
+          writeDashRow(sheet, row, blankEmp, isRV);
+          applyDashFormatting(sheet, row, blankEmp, isRV);
+        }
+      });
+      empRows = getEmpRowsInBlock(sheet, block.startRow, nameCol);
+    }
 
     empRows.forEach(({ name, row }) => {
       const empRecs = byMonth[mk][name] || {};
@@ -678,7 +717,65 @@ function doGet(e) {
   ).setMimeType(ContentService.MimeType.JSON);
 }
 
-// ── menu ──────────────────────────────────────────────────────
+// ── onEdit trigger — manual input formatting in weekly report columns ────
+// When a user manually types a status code in a daily STATUS cell,
+// apply the matching background/font color automatically.
+function onEdit(e) {
+  if (!e || !e.range) return;
+  const sheet = e.range.getSheet();
+  const sheetName = sheet.getName();
+  if (sheetName !== 'RV' && sheetName !== 'COMS') return;
+
+  const isRV     = sheetName === 'RV';
+  const dashCount = getDashHeaders(isRV).length;
+  const dailyStartCol = 2 + dashCount; // first STATUS column
+  const editCol  = e.range.getColumn();
+  const editRow  = e.range.getRow();
+
+  // Only act on daily columns (STATUS cols = dailyStartCol, dailyStartCol+3, +6, …)
+  if (editCol < dailyStartCol) return;
+  const offsetFromDaily = editCol - dailyStartCol;
+  const colInDay = offsetFromDaily % 3; // 0=STATUS, 1=TIME IN, 2=TIME OUT
+  if (colInDay !== 0) return; // only trigger on STATUS cell edits
+
+  const value = (e.range.getValue() || '').toString().trim();
+  if (!value) {
+    // Clear formatting if cell is emptied
+    e.range.clearFormat()
+      .setBorder(true, true, true, true, true, true)
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle');
+    // Also clear the 3-cell group
+    sheet.getRange(editRow, editCol, 1, 3)
+      .clearFormat()
+      .setBorder(true, true, true, true, true, true)
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle');
+    return;
+  }
+
+  // Map short codes to full status names for color lookup
+  const codeMap = {
+    'P': 'Present', 'A': 'Absent', 'L': 'Late', 'UT': 'Undertime',
+    'OT': 'Overtime', 'AWOL': 'AWOL', 'SL': 'Sick Leave',
+    'NS': 'No Schedule', 'L&UT': 'Late and Undertime', 'WFH': 'Work From Home'
+  };
+  const fullStatus = codeMap[value.toUpperCase()] || value;
+  const si = getStatusInfo(fullStatus);
+  if (!si) return;
+
+  // Apply color to the 3-cell group (STATUS + TIME IN + TIME OUT)
+  sheet.getRange(editRow, editCol, 1, 3)
+    .setBackground(si.bg)
+    .setFontColor(si.text)
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle')
+    .setBorder(true, true, true, true, true, true);
+
+  // Normalize the value to the short code
+  e.range.setValue(si.code);
+}
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -720,31 +817,42 @@ function setCOMSCompanyName() {
 }
 
 function forceRecreateHeaders() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const props = PropertiesService.getScriptProperties();
   const depts = [
-    { name: 'RV',   isRV: true  },
-    { name: 'COMS', isRV: false }
+    { name: 'RV',   dept: 'rv',   isRV: true  },
+    { name: 'COMS', dept: 'coms', isRV: false }
   ];
   const now = new Date();
 
-  depts.forEach(({ name, isRV }) => {
+  depts.forEach(({ name, dept, isRV }) => {
     const sh = ss.getSheetByName(name) || ss.insertSheet(name);
     sh.clear();
     sh.clearFormats();
     sh.setFrozenRows(0);
     sh.setFrozenColumns(0);
 
-    // Write sentinel in col A row 1
     sh.getRange(1, 1).setValue('V2');
     sh.setColumnWidth(1, 2);
     sh.getRange(1, 1).setFontColor('#ffffff').setBackground('#ffffff');
 
-    // Write current month block starting at row 2
     sh.getRange(2, 1).setValue('MONTH_BLOCK:' + now.getFullYear() + '-' + now.getMonth());
     writeBlockHeaders(sh, 2, now.getFullYear(), now.getMonth(), isRV);
+
+    // Re-populate employee rows and attendance from saved Script Properties
+    const stateJson = props.getProperty('appdata_' + dept);
+    if (stateJson) {
+      const state = JSON.parse(stateJson);
+      if (state.employees && state.employees.length > 0) {
+        updateDashboard(sh, buildDashStats(state.employees, state.attendanceData || [], dept));
+      }
+      if (state.attendanceData && state.attendanceData.length > 0) {
+        updateWeeklyReportFull(sh, state.attendanceData);
+      }
+    }
   });
 
-  SpreadsheetApp.getUi().alert('Sheets reset with current month layout. Sync from the app to populate employee data.');
+  SpreadsheetApp.getUi().alert('Sheets reset and repopulated from saved data successfully!');
 }
 
 function setRVWeeklyLabel() { setWeeklyLabel_('rv'); }

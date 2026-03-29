@@ -56,7 +56,7 @@ function syncDashboardToSheets() {
                 case 'Absent': stats.absent++; break;
                 case 'Late': stats.late++; stats.totalLates += record.lateMinutes || 15; break;
                 case 'Undertime': stats.undertime++; break;
-                case 'Overtime': stats.overtime++; break;
+                case 'Overtime': if (currentDepartment === 'rv') stats.overtime++; else stats.present++; break;
                 case 'AWOL': stats.awol++; break;
                 case 'Sick Leave': stats.sickLeave++; break;
                 case 'Work From Home': stats.wfh++; break;
@@ -956,7 +956,7 @@ function updateDashboard() {
                     stats.undertime++;
                     break;
                 case 'Overtime':
-                    stats.overtime++;
+                    if (currentDepartment === 'rv') stats.overtime++; else stats.present++;
                     break;
                 case 'AWOL':
                     stats.awol++;
