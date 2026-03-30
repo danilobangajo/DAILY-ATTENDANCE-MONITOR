@@ -21,7 +21,7 @@ const storage = (() => {
 
 // Note: syncToGoogleSheets function is defined in config.js
 
-function syncDashboardToSheets() {
+async function syncDashboardToSheets() {
     const employees = JSON.parse(storage.getItem('employees') || '[]');
     const attendanceData = loadAttendanceData();
     
@@ -66,13 +66,13 @@ function syncDashboardToSheets() {
         return stats;
     });
     
-    syncToGoogleSheets('dashboard', { employees: employeeStats });
+    return syncToGoogleSheets('dashboard', { employees: employeeStats });
 }
 
-function syncWeeklyReportToSheets() {
+async function syncWeeklyReportToSheets() {
     const attendanceData = loadAttendanceData();
     const deptRecords = attendanceData.filter(r => r.department === currentDepartment);
-    syncToGoogleSheets('weeklyReport', { records: deptRecords });
+    return syncToGoogleSheets('weeklyReport', { records: deptRecords });
 }
 
 // Get policy color based on AWOL count
@@ -694,11 +694,17 @@ function getStatusBadgeClass(status) {
 // Format time to AM/PM
 function formatTime(time) {
     if (!time) return '-';
-    const [hours, minutes] = time.split(':');
+    const parts = time.split(':');
+    const hours = parts[0];
+    const minutes = parts[1] || '00';
+    const seconds = parts[2];
     const hour = parseInt(hours);
     const ampm = hour >= 12 ? 'PM' : 'AM';
     const displayHour = hour % 12 || 12;
-    return `${displayHour.toString().padStart(2, '0')}:${minutes} ${ampm}`;
+    if (typeof seconds !== 'undefined') {
+        return `${displayHour.toString().padStart(2,'0')}:${minutes}:${seconds} ${ampm}`;
+    }
+    return `${displayHour.toString().padStart(2,'0')}:${minutes} ${ampm}`;
 }
 
 // Load attendance data from storage
@@ -1048,7 +1054,7 @@ function updateDashboard() {
 }
 
 // Handle form submission
-document.getElementById('attendanceForm').addEventListener('submit', function(e) {
+document.getElementById('attendanceForm').addEventListener('submit', async function(e) {
     e.preventDefault();
     
     const name = document.getElementById('employeeName').value;
@@ -1122,16 +1128,9 @@ document.getElementById('attendanceForm').addEventListener('submit', function(e)
     const notes = employee && employee.scheduleNotes ? employee.scheduleNotes.toUpperCase() : '';
     const isFlex = notes.includes('FLEX') || notes.includes('FLOAT');
 
-    // If employee has FLEX schedule and the Time In field still shows schedule start,
-    // override with the actual current time so the recorded time matches when they submitted.
-    if (isFlex && employee && employee.scheduleStart) {
-        if (timeIn && timeIn === employee.scheduleStart) {
-            const now = new Date();
-            const hh = now.getHours().toString().padStart(2, '0');
-            const mm = now.getMinutes().toString().padStart(2, '0');
-            timeIn = `${hh}:${mm}`;
-        }
-    }
+    // For FLEX or FLOAT schedules, preserve the Time In value provided
+    // (do not override with the current time). This ensures attendance details
+    // reflect the scheduled time when the user time-ins using their flex schedule.
 
     // Block FLOAT employees from submitting attendance
     if (notes.includes('FLOAT') && !existingRecordId) {
@@ -1198,8 +1197,9 @@ document.getElementById('attendanceForm').addEventListener('submit', function(e)
             updateWeeklyReportWithFilter();
             updateDashboard();
             updateEmployeeDatalist();
-            syncDashboardToSheets();
-            syncWeeklyReportToSheets();
+            await syncFullState();
+            await syncDashboardToSheets();
+            await syncWeeklyReportToSheets();
             showNotification('Attendance recorded successfully!', 'success');
             return;
         }
@@ -1305,10 +1305,10 @@ document.getElementById('attendanceForm').addEventListener('submit', function(e)
     // Update employee datalist for autocomplete
     updateEmployeeDatalist();
     
-    // Sync to Google Sheets
-    syncDashboardToSheets();
-    syncWeeklyReportToSheets();
-    syncFullState();
+    // Sync to Google Sheets — ensure full state is sent first so server can seed blocks
+    await syncFullState();
+    await syncDashboardToSheets();
+    await syncWeeklyReportToSheets();
 });
 
 // Show notification
@@ -2615,7 +2615,10 @@ function addEmployeeNameListener() {
     
     if (!employeeNameInput) return;
     
-    employeeNameInput.addEventListener('input', handleEmployeeNameChange);
+    // Lightweight handler while typing: don't populate records until the user
+    // commits the value (change event). This prevents partial input from
+    // triggering time-in/time-out modes prematurely.
+    employeeNameInput.addEventListener('input', handleEmployeeNameTyping);
     employeeNameInput.addEventListener('change', handleEmployeeNameChange);
     dateInput.addEventListener('change', handleEmployeeNameChange);
 
@@ -2795,6 +2798,45 @@ function addEmployeeNameListener() {
             if (earlyOutBtn) earlyOutBtn.style.display = 'inline-flex';
             if (returnWorkBtn) returnWorkBtn.style.display = 'none';
             if (returnSection) returnSection.style.display = 'none';
+        }
+    }
+
+    // Called on each keystroke — keep this minimal: clear any existing markers
+    // and disable submit until the user selects/commits a full name.
+    function handleEmployeeNameTyping() {
+        const employeeNameInput = document.getElementById('employeeName');
+        const timeInInput = document.getElementById('timeIn');
+        const timeOutInput = document.getElementById('timeOut');
+        const statusSelect = document.getElementById('attendanceStatus');
+        const submitBtn = document.querySelector('#attendanceForm button[type="submit"]');
+
+        // Remove any markers from prior selection
+        employeeNameInput.removeAttribute('data-existing-record-id');
+        employeeNameInput.removeAttribute('data-early-out-record-id');
+        employeeNameInput.removeAttribute('data-flex');
+
+        // Reset fields to neutral typing state
+        if (timeInInput) {
+            timeInInput.value = '';
+            timeInInput.readOnly = true;
+            timeInInput.style.backgroundColor = '#f8f9fa';
+            timeInInput.style.cursor = 'not-allowed';
+        }
+        if (timeOutInput) {
+            timeOutInput.value = '';
+            timeOutInput.disabled = true;
+            timeOutInput.style.backgroundColor = '#e9ecef';
+            timeOutInput.style.cursor = 'not-allowed';
+        }
+        if (statusSelect) {
+            statusSelect.value = '';
+            statusSelect.disabled = false;
+            statusSelect.style.backgroundColor = '';
+            statusSelect.style.cursor = '';
+        }
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.style.opacity = '0.6';
         }
     }
 }

@@ -281,15 +281,12 @@ function doPost(e) {
             const nameCol = 1 + getDashHeaders(isRV).length;
             const empRows = getEmpRowsInBlock(sheet, block.startRow, nameCol);
             if (empRows.length === 0) {
-              // No employees yet in this block — write them from saved state
-              const deptEmps = state.employees.filter(e => e.department === data.department);
-              // Build minimal stats objects (zeros) just to populate name rows
-              const empStats = deptEmps.sort((a,b) => (a.name||'').localeCompare(b.name||'')).map(e => ({
-                name: e.name, present:0, absent:0, late:0, totalLates:0,
-                undertime:0, overtime:0, awol:0, sickLeave:0, wfh:0,
-                scheduleDisplay: e.scheduleDisplay || ''
-              }));
-              updateDashboard(sheet, empStats);
+              // No employees yet in this block — seed them into THIS month block
+              try {
+                seedEmployeesIntoBlock(sheet, block.startRow, isRV, data.department);
+              } catch (e) {
+                Logger.log('seedEmployeesIntoBlock (doPost) error: ' + e);
+              }
             }
           });
         }
@@ -316,6 +313,15 @@ function doPost(e) {
         updateDashboard(sheet, buildDashStats(data.state.employees, data.state.attendanceData || [], dept));
       }
       updateWeeklyReportFull(sheet, data.state.attendanceData || []);
+    }
+
+    // Import manually-edited weekly report cells back into PropertiesService state
+    if (data.type === 'importFromSheet') {
+      try {
+        importFromSheetToState(sheet, data.department);
+      } catch (ie) {
+        Logger.log('importFromSheet error: ' + ie);
+      }
     }
 
     return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'Synced' }))
@@ -472,15 +478,17 @@ function updateWeeklyReportFull(sheet, records) {
   const dashCount = getDashHeaders(isRV).length;
   const nameCol   = 1 + dashCount;
 
-  // Build lookup: byMonth[mk][empName][dateStr] = record
+  // Build lookup: byMonth[mk][normalizedEmpName][dateStr] = record
+  // Normalize names by trimming, collapsing whitespace and uppercasing to avoid mismatch
   const byMonth = {};
   (records || []).forEach(r => {
-    if (!r.date) return;
+    if (!r.date || !r.name) return;
     const d  = new Date(r.date + 'T00:00:00');
     const mk = d.getFullYear() + '-' + d.getMonth();
     if (!byMonth[mk]) byMonth[mk] = {};
-    if (!byMonth[mk][r.name]) byMonth[mk][r.name] = {};
-    byMonth[mk][r.name][r.date] = r;
+    const normName = r.name.toString().replace(/\s+/g, ' ').trim().toUpperCase();
+    if (!byMonth[mk][normName]) byMonth[mk][normName] = {};
+    byMonth[mk][normName][r.date] = r;
   });
 
   // Process every existing block in the sheet — clear+rewrite all
@@ -492,7 +500,8 @@ function updateWeeklyReportFull(sheet, records) {
     const monthData     = byMonth[mk] || {};
 
     getEmpRowsInBlock(sheet, block.startRow, nameCol).forEach(({ name, row }) => {
-      const empRecs = monthData[name] || {};
+      const normSheetName = (name || '').toString().replace(/\s+/g, ' ').trim().toUpperCase();
+      const empRecs = monthData[normSheetName] || {};
       let totalDays = 0;
       let col = dailyStartCol;
 
@@ -548,15 +557,17 @@ function updateWeeklyReport(sheet, records) {
   const dashCount = getDashHeaders(isRV).length;
   const nameCol   = 1 + dashCount;
 
-  // Group records: byMonth[YYYY-M][empName][dateStr] = record
+  // Group records: byMonth[YYYY-M][normalizedEmpName][dateStr] = record
+  // Normalize names by trimming, collapsing whitespace and uppercasing to avoid mismatch
   const byMonth = {};
   records.forEach(r => {
-    if (!r.date) return;
+    if (!r.date || !r.name) return;
     const d  = new Date(r.date + 'T00:00:00');
     const mk = d.getFullYear() + '-' + d.getMonth();
     if (!byMonth[mk]) byMonth[mk] = {};
-    if (!byMonth[mk][r.name]) byMonth[mk][r.name] = {};
-    byMonth[mk][r.name][r.date] = r;
+    const normName = r.name.toString().replace(/\s+/g, ' ').trim().toUpperCase();
+    if (!byMonth[mk][normName]) byMonth[mk][normName] = {};
+    byMonth[mk][normName][r.date] = r;
   });
 
   Object.keys(byMonth).forEach(mk => {
@@ -569,7 +580,8 @@ function updateWeeklyReport(sheet, records) {
     const empRows = getEmpRowsInBlock(sheet, block.startRow, nameCol);
 
     empRows.forEach(({ name, row }) => {
-      const empRecs = byMonth[mk][name] || {};
+      const normSheetName = (name || '').toString().replace(/\s+/g, ' ').trim().toUpperCase();
+      const empRecs = byMonth[mk][normSheetName] || {};
       let totalDays = 0;
       let col = dailyStartCol;
 
@@ -756,8 +768,50 @@ function onOpen() {
     .addItem('Set COMS Company Name', 'setCOMSCompanyName')
     .addItem('Set RV Weekly Report Label', 'setRVWeeklyLabel')
     .addItem('Set COMS Weekly Report Label', 'setCOMSWeeklyLabel')
+      .addItem('Add Karin (RV)', 'addKarinToRV')
     .addToUi();
 }
+
+  // Add a named employee into saved app state for a department if missing.
+  function addEmployeeToState(dept, emp) {
+    if (!dept || !emp || !emp.name) return;
+    const props = PropertiesService.getScriptProperties();
+    const key = 'appdata_' + dept;
+    const stateJson = props.getProperty(key) || '{"employees":[],"attendanceData":[]}';
+    let state = {};
+    try { state = JSON.parse(stateJson); } catch (e) { state = { employees: [], attendanceData: [] }; }
+    state.employees = state.employees || [];
+    const exists = state.employees.some(e => (e.name || '').trim().toUpperCase() === (emp.name || '').trim().toUpperCase());
+    if (exists) return;
+    // Ensure basic fields
+    const nowId = Date.now();
+    const toAdd = Object.assign({ id: nowId, name: emp.name, scheduleStart: emp.scheduleStart || '', scheduleEnd: emp.scheduleEnd || '', scheduleDisplay: emp.scheduleDisplay || '', scheduleNotes: emp.scheduleNotes || '', weeklyDays: emp.weeklyDays || '', specialDays: emp.specialDays || [], department: dept }, emp);
+    state.employees.push(toAdd);
+    props.setProperty(key, JSON.stringify(state));
+    // Update sheets immediately
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(dept.toUpperCase()) || ss.getSheetByName('RV');
+    if (sheet) {
+      // Rebuild dashboard and weekly report from saved state
+      updateDashboard(sheet, buildDashStats(state.employees, state.attendanceData || [], dept));
+      updateWeeklyReportFull(sheet, state.attendanceData || []);
+    }
+  }
+
+  function addKarinToRV() {
+    const emp = {
+      name: 'Karin',
+      scheduleStart: '09:00',
+      scheduleEnd: '18:00',
+      scheduleDisplay: '9:00 - 6:00',
+      scheduleNotes: 'MANUAL',
+      weeklyDays: 'Mon,Tue,Wed,Thu,Fri',
+      specialDays: [],
+      department: 'rv'
+    };
+    addEmployeeToState('rv', emp);
+    SpreadsheetApp.getUi().alert('Karin added to saved state (RV). Dashboard & Weekly Report updated.');
+  }
 
 function setRVCompanyName() {
   const ui = SpreadsheetApp.getUi();

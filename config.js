@@ -1,5 +1,5 @@
 // Configuration - Paste your Google Apps Script Web App URL here
-const GOOGLE_SHEETS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyZM2Ov6PBbwvaXzYlW4Br6Dx8lFVJdVo2twK7FHcxJMN55pBW3V_YheCLgWFFvnZ0C/exec';
+const GOOGLE_SHEETS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbw5lMDdHbCyUH2A5ZlzrAqniN9gEp363AUed4OoTYIGY_Zp5tfG4XzyzgO7qVKSCNnO/exec';
 
 // Sync to Google Sheets
 async function syncToGoogleSheets(type, data) {
@@ -16,7 +16,7 @@ async function syncToGoogleSheets(type, data) {
         const response = await fetch(GOOGLE_SHEETS_WEB_APP_URL, {
             method: 'POST',
             mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'text/plain' },
             body: JSON.stringify({
                 type: type,
                 department: typeof currentDepartment !== 'undefined' ? currentDepartment : 'rv',
@@ -47,11 +47,11 @@ async function syncFullState() {
         // Retry up to 3 times to ensure delete/edit propagates to remote
         let success = false;
         for (let attempt = 0; attempt < 3 && !success; attempt++) {
-            try {
+                try {
                 await fetch(GOOGLE_SHEETS_WEB_APP_URL, {
                     method: 'POST',
                     mode: 'no-cors',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'text/plain' },
                     body: JSON.stringify({
                         type: 'fullState',
                         department: dept,
