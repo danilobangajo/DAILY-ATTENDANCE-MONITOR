@@ -1221,8 +1221,15 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
                 const session1Hours = parseFloat(existingRecord.session1Hours || 0);
                 totalHours = parseFloat((session1Hours + session2Hours).toFixed(2));
 
-                // Restore original status (not Undertime anymore)
-                status = existingRecord.previousStatus || existingRecord.status || 'Present';
+                // Restore original status (not Undertime anymore).
+                // Prefer explicit previousStatus if available; otherwise keep
+                // the existing record.status. Do NOT default to 'Present' as
+                // this can unintentionally clear 'Late' or other statuses.
+                if (existingRecord.previousStatus) {
+                    status = existingRecord.previousStatus;
+                } else if (existingRecord.status) {
+                    status = existingRecord.status;
+                }
 
                 attendanceData[recordIndex] = {
                     ...existingRecord,
