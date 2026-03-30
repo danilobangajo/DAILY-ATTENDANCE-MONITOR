@@ -522,7 +522,7 @@ function updateWeeklyReportFull(sheet, records) {
           sheet.getRange(row, col + 1).setValue(fmtT(rec.timeIn));
           sheet.getRange(row, col + 2).setValue(fmtT(rec.timeOut));
           if (si) sheet.getRange(row, col, 1, 3).setBackground(si.bg).setFontColor(si.text).setFontWeight('bold');
-          if (rec.status !== 'Work From Home') totalDays++;
+          if (/(present|late|undertime|overtime)/i.test(rec.status || '')) totalDays++;
         }
         col += 3;
       }
@@ -605,7 +605,7 @@ function updateWeeklyReport(sheet, records) {
             sheet.getRange(row, col, 1, 3)
               .setBackground(si.bg).setFontColor(si.text).setFontWeight('bold');
           }
-          if (rec.status !== 'Work From Home') totalDays++;
+          if (/(present|late|undertime|overtime)/i.test(rec.status || '')) totalDays++;
         }
         col += 3;
       }

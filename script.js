@@ -341,7 +341,7 @@ function updateDailyReportByWeek(weekNumber, year, month) {
         const tdStatus = document.createElement('td');
         const badge = document.createElement('span');
         badge.className = `badge-status ${getStatusBadgeClass(record.status)}`;
-        badge.textContent = record.status;
+        badge.textContent = getDisplayStatus(record.status);
         tdStatus.appendChild(badge);
 
         const tdTimeIn = document.createElement('td');
@@ -691,6 +691,23 @@ function getStatusBadgeClass(status) {
     return statusMap[status] || 'status-present';
 }
 
+// Display-friendly status text (UI only). Map various leave types to a
+// unified "Leave" label while preserving the underlying `record.status` value.
+function getDisplayStatus(status) {
+    if (!status) return '';
+    const s = status.toString();
+    if (/sick|vacation|vac|leave/i.test(s)) return 'Leave';
+    return status;
+}
+
+// Return true if the status should be counted as a worked day in totals
+function isCountedStatus(status) {
+    if (!status) return false;
+    const s = status.toString().toLowerCase();
+    // Count only actual work statuses — Present, Late, Undertime, Overtime
+    return /present|late|undertime|overtime/.test(s);
+}
+
 // Format time to AM/PM
 function formatTime(time) {
     if (!time) return '-';
@@ -758,7 +775,7 @@ function updateDailyReport() {
         return `
         <tr>
             <td>${record.name}</td>
-            <td><span class="badge-status ${getStatusBadgeClass(record.status)}">${record.status}</span></td>
+            <td><span class="badge-status ${getStatusBadgeClass(record.status)}">${getDisplayStatus(record.status)}</span></td>
             <td class="${isLate ? 'text-warning fw-bold' : ''}">${formatTime(record.timeIn)}</td>
             <td>${record.scheduleTime || '-'}</td>
             <td>${record.date}</td>
@@ -822,13 +839,18 @@ function updateWeeklyReportWithFilter(selectedMonth = null, selectedYear = null,
                 dates: [],
                 scheduleDisplay: employee ? employee.scheduleDisplay : 'Not Set',
                 totalHours: 0,
+                absentCount: 0,
+                leaveCount: 0,
                 records: []
             };
         }
         // Add date if not already in the list (exclude WFH from day count)
-        if (!employeeRecords[record.name].dates.includes(record.date) && record.status !== 'Work From Home') {
+        if (!employeeRecords[record.name].dates.includes(record.date) && isCountedStatus(record.status)) {
             employeeRecords[record.name].dates.push(record.date);
         }
+        // Count absences and leaves separately
+        if (/absent/i.test(record.status || '')) employeeRecords[record.name].absentCount++;
+        if (/sick|vacation|vac|leave/i.test(record.status || '')) employeeRecords[record.name].leaveCount++;
         employeeRecords[record.name].totalHours += parseFloat(record.totalHours || 0);
         employeeRecords[record.name].records.push(record);
     });
@@ -851,6 +873,8 @@ function updateWeeklyReportWithFilter(selectedMonth = null, selectedYear = null,
             <td><strong>${data.name}</strong></td>
             <td><span class="badge bg-info text-dark">${data.scheduleDisplay}</span></td>
             <td class="text-center fw-bold text-primary">${data.totalHours.toFixed(2)} hrs</td>
+            <td class="text-center fw-bold text-danger">${data.absentCount || 0}</td>
+            <td class="text-center fw-bold text-warning">${data.leaveCount || 0}</td>
             <td class="text-center fw-bold text-success">${data.dates.length} day${data.dates.length !== 1 ? 's' : ''}</td>
             <td class="text-center">
                 <button class="btn btn-sm btn-outline-info" onclick="viewEmployeeMonthDetails('${data.name}', ${selectedMonth}, ${selectedYear})" title="View Details"><i class="bi bi-eye"></i></button>
@@ -880,7 +904,7 @@ function updateDashboard() {
             <th class="text-center">Undertime</th>
             <th class="text-center">Overtime</th>
             <th class="text-center">AWOL</th>
-            <th class="text-center">Sick Leave / Vacation Leave</th>
+            <th class="text-center">Leave</th>
             <th class="text-center">WFH</th>
             <th class="text-center">Sched Time</th>
             <th class="text-center">Notes</th>
@@ -894,7 +918,7 @@ function updateDashboard() {
             <th class="text-center">Late</th>
             <th class="text-center">Undertime</th>
             <th class="text-center">AWOL</th>
-            <th class="text-center">Sick Leave / Vacation Leave</th>
+            <th class="text-center">Leave</th>
             <th class="text-center">WFH</th>
             <th class="text-center">Sched Time</th>
             <th class="text-center">Notes</th>
@@ -1758,7 +1782,7 @@ function viewEmployeeDetails(employeeName) {
         const tdStatus = document.createElement('td');
         const badge = document.createElement('span');
         badge.className = `badge-status ${getStatusBadgeClass(r.status)}`;
-        badge.textContent = r.status;
+        badge.textContent = getDisplayStatus(r.status);
         tdStatus.appendChild(badge);
 
         const tdIn = document.createElement('td');
@@ -1969,7 +1993,7 @@ function updateWeeklyReportCurrentWeek(weekStart, weekEnd) {
             };
         }
         employeeRecords[record.name].totalHours += parseFloat(record.totalHours || 0);
-        if (record.status !== 'Work From Home') employeeRecords[record.name].totalDays++;
+        if (isCountedStatus(record.status)) employeeRecords[record.name].totalDays++;
     });
     
     modalTableBody.innerHTML = Object.values(employeeRecords).sort((a, b) => a.name.localeCompare(b.name)).map(data => `
@@ -2113,7 +2137,7 @@ function viewEmployeeMonthDetails(employeeName, month, year) {
         const tdStatus = document.createElement('td');
         const badge = document.createElement('span');
         badge.className = `badge-status ${getStatusBadgeClass(r.status)}`;
-        badge.textContent = r.status;
+        badge.textContent = getDisplayStatus(r.status);
         tdStatus.appendChild(badge);
 
         const tdIn = document.createElement('td'); tdIn.textContent = formatTime(r.timeIn);
@@ -2204,7 +2228,7 @@ function filterDetailWeek(input, employeeName, month, year) {
         const tdStatus = document.createElement('td');
         const badge = document.createElement('span');
         badge.className = `badge-status ${getStatusBadgeClass(r.status)}`;
-        badge.textContent = r.status;
+        badge.textContent = getDisplayStatus(r.status);
         tdStatus.appendChild(badge);
         const tdIn = document.createElement('td'); tdIn.textContent = formatTime(r.timeIn);
         const tdOut = document.createElement('td'); tdOut.textContent = formatTime(r.timeOut);
@@ -2357,7 +2381,7 @@ function updateWeeklyReportWithDateFilter(selectedDate) {
             };
         }
         employeeRecords[record.name].totalHours += parseFloat(record.totalHours || 0);
-        if (record.status !== 'Work From Home') employeeRecords[record.name].totalDays++;
+        if (isCountedStatus(record.status)) employeeRecords[record.name].totalDays++;
         employeeRecords[record.name].records.push(record);
     });
     
@@ -2948,3 +2972,37 @@ function resetMonthlyStats() {
     };
     bsModal.show();
 }
+
+// --- Test helper: seed sample employees + attendance records ---
+function seedTestData() {
+    const employees = [
+        { id: Date.now() + 101, name: 'Alice', scheduleStart: '08:00', scheduleEnd: '17:00', scheduleDisplay: '08:00 - 17:00', scheduleNotes: '', weeklyDays: 'Mon, Tue, Wed, Thu, Fri', specialDays: [], department: currentDepartment },
+        { id: Date.now() + 102, name: 'Bob', scheduleStart: '09:00', scheduleEnd: '18:00', scheduleDisplay: '09:00 - 18:00', scheduleNotes: '', weeklyDays: 'Mon, Tue, Wed, Thu, Fri', specialDays: [], department: currentDepartment }
+    ];
+
+    const today = getLocalISODate();
+    const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().split('T')[0]; })();
+
+    const attendanceData = [
+        // Alice: Present today -> should count
+        { id: Date.now() + 201, name: 'Alice', date: today, timeIn: '08:05', timeOut: '17:10', status: 'Present', totalHours: 9, department: currentDepartment },
+        // Alice: Sick Leave yesterday -> should NOT count
+        { id: Date.now() + 202, name: 'Alice', date: yesterday, timeIn: '', timeOut: '', status: 'Sick Leave', totalHours: 0, department: currentDepartment },
+        // Bob: Absent today -> should NOT count
+        { id: Date.now() + 203, name: 'Bob', date: today, timeIn: '', timeOut: '', status: 'Absent', totalHours: 0, department: currentDepartment },
+        // Bob: WFH yesterday -> should NOT count
+        { id: Date.now() + 204, name: 'Bob', date: yesterday, timeIn: '09:00', timeOut: '18:00', status: 'Work From Home', totalHours: 9, department: currentDepartment }
+    ];
+
+    storage.setItem('employees', JSON.stringify(employees));
+    storage.setItem('attendanceData', JSON.stringify(attendanceData));
+
+    // Refresh UI
+    updateDailyReport();
+    updateWeeklyReportWithFilter();
+    updateDashboard();
+
+    showNotification('Seeded test data: Alice (Present + Sick), Bob (Absent + WFH).', 'info');
+}
+
+window.seedTestData = seedTestData;
