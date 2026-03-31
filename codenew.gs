@@ -6,7 +6,7 @@
 //   N+1 : Stat headers (PRESENT…NAME) + Day headers (Mar 1, Mar 2…)
 //   N+2 : (blank under stats)  + STATUS / TIME IN / TIME OUT per day + TOTAL DAYS
 //   N+3…: Employee data rows (one row per employee)
-//   (1 blank gap row, then next month block starts)
+//   (3 blank gap rows, then next month block starts)
 //
 // Column layout (starting at col B = col 2):
 //   RV  cols 2-12 : PRESENT ABSENT LATE TOTAL_LATES UNDERTIME OVERTIME AWOL SICK_LEAVE WFH SCHED_TIME NAME
@@ -174,7 +174,8 @@ function getOrCreateBlock(sheet, year, month, isRV) {
     const last       = blocks[blocks.length - 1];
     const lastNameCol = isRV ? 12 : 10;
     const empCount   = getEmpRowsInBlock(sheet, last.startRow, lastNameCol).length;
-    appendRow = last.startRow + 3 + empCount + 1; // 3 header rows + employees + 1 gap
+    // Use a 3-row trailing gap between month blocks to avoid overlap
+    appendRow = last.startRow + 3 + empCount + 3; // 3 header rows + employees + 3-row gap
   }
 
   // Write marker in col A (hidden)
@@ -236,6 +237,8 @@ function seedEmployeesIntoBlock(sheet, blockStartRow, isRV, dept) {
       writeDashRow(sheet, row, empObj, isRV);
       applyDashFormatting(sheet, row, empObj, isRV);
     });
+    // Ensure trailing gap rows after seeding employees
+    try { ensureBlockTrailingGap(sheet, blockStartRow, isRV); } catch (e) { Logger.log('ensureBlockTrailingGap error (seed): ' + e); }
   } catch (err) {
     Logger.log('seedEmployeesIntoBlock error: ' + err);
   }
@@ -670,6 +673,11 @@ function deleteEmployeeFromAllBlocks(sheet, employeeName) {
     sheet.deleteRow(row);
     Logger.log('Deleted employee row ' + row + ': ' + employeeName);
   });
+
+  // Ensure each month block has a 3-row trailing gap after deletions
+  try {
+    findMonthBlocks(sheet).forEach(b => ensureBlockTrailingGap(sheet, b.startRow, isRV));
+  } catch (e) { Logger.log('ensureBlockTrailingGap error (all): ' + e); }
 }
 
 // Delete an employee row only within a specific month block (year, month are numeric, month is 0-based)
@@ -691,6 +699,9 @@ function deleteEmployeeFromBlock(sheet, employeeName, year, month) {
     sheet.deleteRow(row);
     Logger.log('Deleted employee row ' + row + ' from block ' + key + ': ' + employeeName);
   });
+
+  // Ensure this block has a 3-row trailing gap after deletion
+  try { ensureBlockTrailingGap(sheet, block.startRow, isRV); } catch (e) { Logger.log('ensureBlockTrailingGap error (block): ' + e); }
 }
 
 // ── deleteEmployeeData ────────────────────────────────────────
@@ -705,8 +716,41 @@ function deleteEmployeeData(sheet, employeeName) {
     if (v === employeeName.trim()) {
       sheet.deleteRow(i);
       Logger.log('Deleted employee row: ' + employeeName);
+      // After deletion, ensure block gaps are intact
+      try { findMonthBlocks(sheet).forEach(b => ensureBlockTrailingGap(sheet, b.startRow, isRV)); } catch (e) { Logger.log('ensureBlockTrailingGap error (data): ' + e); }
       return;
     }
+  }
+}
+
+// Ensure a given month block has at least a 3-row trailing gap after the last employee row
+function ensureBlockTrailingGap(sheet, blockStartRow, isRV) {
+  const dashCount = getDashHeaders(isRV).length;
+  const nameCol = 1 + dashCount;
+  const dataStart = blockStartRow + 3;
+  const blocks = findMonthBlocks(sheet);
+  // Find next block startRow or end of sheet
+  let nextStart = sheet.getLastRow() + 1;
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i].startRow === blockStartRow) {
+      if (i + 1 < blocks.length) nextStart = blocks[i + 1].startRow;
+      break;
+    }
+  }
+
+  // Find last non-empty name row in this block
+  let lastNonEmpty = dataStart - 1;
+  for (let r = dataStart; r < nextStart; r++) {
+    const name = (sheet.getRange(r, nameCol).getValue() || '').toString().trim();
+    if (name) lastNonEmpty = r;
+  }
+
+  const requiredGap = 3;
+  const currentGap = nextStart - (lastNonEmpty + 1);
+  if (currentGap < requiredGap) {
+    const toInsert = requiredGap - currentGap;
+    sheet.insertRows(nextStart, toInsert);
+    Logger.log('Inserted ' + toInsert + ' gap rows at ' + nextStart + ' for block starting ' + blockStartRow);
   }
 }
 
