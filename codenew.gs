@@ -309,10 +309,31 @@ function doPost(e) {
       PropertiesService.getScriptProperties()
         .setProperty('appdata_' + dept, JSON.stringify(data.state));
       // Also rewrite the sheet so deleted records are cleared from all cells
+      // Ensure month blocks exist for every month present in attendanceData
+      const attendance = data.state.attendanceData || [];
+      const months = {};
+      (attendance || []).forEach(r => {
+        if (!r || !r.date) return;
+        const d = new Date(r.date + 'T00:00:00');
+        months[d.getFullYear() + '-' + d.getMonth()] = { y: d.getFullYear(), mo: d.getMonth() };
+      });
+      const isRV = sheet.getName() === 'RV';
+      Object.values(months).forEach(({ y, mo }) => {
+        try { getOrCreateBlock(sheet, y, mo, isRV); } catch (e) { Logger.log('getOrCreateBlock error: ' + e); }
+      });
+
+      // For every existing month block, write the dashboard stats into that block
       if (data.state.employees && data.state.employees.length > 0) {
-        updateDashboard(sheet, buildDashStats(data.state.employees, data.state.attendanceData || [], dept));
+        const deptEmps = data.state.employees;
+        findMonthBlocks(sheet).forEach(block => {
+          try {
+            updateDashboard(sheet, buildDashStats(deptEmps, data.state.attendanceData || [], dept, block.year, block.monthNum), block.year, block.monthNum);
+          } catch (e) { Logger.log('updateDashboard (fullState) error: ' + e); }
+        });
       }
-      updateWeeklyReportFull(sheet, data.state.attendanceData || []);
+
+      // Now rewrite weekly report cells for all months using full data
+      updateWeeklyReportFull(sheet, attendance);
     }
 
     // Import manually-edited weekly report cells back into PropertiesService state
@@ -337,7 +358,8 @@ function doPost(e) {
 // Writes PRESENT/ABSENT/LATE/… stats into the CURRENT month block.
 // Each month block has its own fresh stats — previous months are untouched.
 
-function updateDashboard(sheet, employees) {
+function updateDashboard(sheet, employees, targetYear, targetMonth) {
+  // If targetYear/targetMonth are provided, write dashboard into that month block.
   if (!employees || employees.length === 0) return;
   ensureSheetReady(sheet);
 
@@ -346,8 +368,11 @@ function updateDashboard(sheet, employees) {
   const dashCount  = dashHdrs.length;
   const nameCol    = 1 + dashCount; // 1-based: col B=2, so nameCol = dashCount+1
 
-  const now   = new Date();
-  const block = getOrCreateBlock(sheet, now.getFullYear(), now.getMonth(), isRV);
+  const now = new Date();
+  const y = (typeof targetYear !== 'undefined' && typeof targetMonth !== 'undefined') ? targetYear : now.getFullYear();
+  const mo = (typeof targetYear !== 'undefined' && typeof targetMonth !== 'undefined') ? targetMonth : now.getMonth();
+
+  const block = getOrCreateBlock(sheet, y, mo, isRV);
   const dataStart = block.startRow + 3;
 
   employees.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -365,7 +390,7 @@ function updateDashboard(sheet, employees) {
     applyDashFormatting(sheet, row, emp, isRV);
   });
 
-  Logger.log('Dashboard updated: ' + employees.length + ' employees, block row ' + block.startRow);
+  Logger.log('Dashboard updated: ' + employees.length + ' employees, block row ' + block.startRow + ' (' + y + '-' + mo + ')');
 }
 
 function writeDashRow(sheet, row, emp, isRV) {
@@ -431,10 +456,10 @@ function applyDashFormatting(sheet, row, emp, isRV) {
 // ── buildDashStats ───────────────────────────────────────────
 // Computes dashboard stats from raw employees + attendanceData arrays
 // (mirrors what script.js updateDashboard does client-side)
-function buildDashStats(employees, attendanceData, dept) {
+function buildDashStats(employees, attendanceData, dept, targetYear, targetMonth) {
   const now = new Date();
-  const curMonth = now.getMonth();
-  const curYear  = now.getFullYear();
+  const curMonth = (typeof targetMonth !== 'undefined') ? Number(targetMonth) : now.getMonth();
+  const curYear  = (typeof targetYear !== 'undefined') ? Number(targetYear) : now.getFullYear();
 
   const stats = {};
   employees.filter(e => e.department === dept)
@@ -449,6 +474,7 @@ function buildDashStats(employees, attendanceData, dept) {
 
   attendanceData.forEach(r => {
     if (r.department !== dept || !stats[r.name]) return;
+    if (!r.date) return;
     const d = new Date(r.date + 'T00:00:00');
     if (d.getMonth() !== curMonth || d.getFullYear() !== curYear) return;
     const s = stats[r.name];
