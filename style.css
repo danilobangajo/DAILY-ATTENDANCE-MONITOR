@@ -206,12 +206,29 @@ body.coms-active {
     justify-content: center; /* horizontal centering fallback */
 }
 
+/* Stronger layout for very large viewports (helps when browser/devtools zoom is at 75%) */
+@media (min-width: 1100px) and (min-height: 760px) {
+    /* Make the form noticeably wider and keep it centered */
+    #mainRow:not(.admin-open) > #formCol {
+        width: 560px !important;
+        flex: 0 0 560px !important;
+        max-width: 560px !important;
+    }
+
+    /* When admin is open, use slightly narrower column so admin panel can fit */
+    #mainRow.admin-open #formCol {
+        width: 520px !important;
+        flex: 0 0 520px !important;
+        max-width: 520px !important;
+    }
+}
+
 /* Form col — fluid width, fits all resolutions */
 #formCol {
-    /* Slightly wider default form column for readability */
-    width: clamp(320px, 26vw, 480px) !important;
-    flex: 0 0 clamp(320px, 26vw, 480px) !important;
-    max-width: clamp(320px, 26vw, 480px) !important;
+    /* Slightly wider default form column for readability — increased to make the card "fatter" */
+    width: clamp(360px, 30vw, 560px) !important;
+    flex: 0 0 clamp(360px, 30vw, 560px) !important;
+    max-width: clamp(360px, 30vw, 560px) !important;
     margin-left: 0 !important;
     max-height: calc(100vh - 100px);
     overflow-y: auto;
@@ -247,9 +264,10 @@ body.coms-active {
 
 /* When admin panel is open, form col stays fluid */
 #mainRow.admin-open #formCol {
-    width: clamp(300px, 22vw, 420px) !important;
-    flex: 0 0 clamp(300px, 22vw, 420px) !important;
-    max-width: clamp(300px, 22vw, 420px) !important;
+    /* Slightly wider when admin panel is open but keep proportionally smaller */
+    width: clamp(340px, 28vw, 520px) !important;
+    flex: 0 0 clamp(340px, 28vw, 520px) !important;
+    max-width: clamp(340px, 28vw, 520px) !important;
 }
 
 /* Tablet & below — allow scroll */
