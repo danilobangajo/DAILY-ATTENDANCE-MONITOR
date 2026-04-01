@@ -710,6 +710,8 @@ function initTimezoneControls() {
             if (tzInterval) { clearInterval(tzInterval); tzInterval = null; }
             // Persist selection
             try { localStorage.removeItem('selectedTimezone'); } catch(e){}
+            // clear any stored interval id on the select
+            try { if (select._tzIntervalId) { clearInterval(select._tzIntervalId); delete select._tzIntervalId; } } catch(e){}
             return;
         }
 
@@ -733,6 +735,9 @@ function initTimezoneControls() {
         update();
         if (tzInterval) clearInterval(tzInterval);
         tzInterval = setInterval(update, 1000);
+        // expose interval id so other code (submit handler) can clear it
+        try { select._tzIntervalId = tzInterval; } catch(e){}
+        try { window._tzIntervalId = tzInterval; } catch(e){}
 
         // Also set attendance date and time inputs to the selected timezone's current date/time
         try {
@@ -1236,7 +1241,18 @@ function updateDashboard() {
 // Handle form submission
 document.getElementById('attendanceForm').addEventListener('submit', async function(e) {
     e.preventDefault();
-    
+    // Capture current TZ at submit and immediately clear/hide the TZ UI so
+    // the panel closes and live updating stops even before submit completes.
+    const tzSelectEl = document.getElementById('timezoneSelect');
+    const tzDisplayEl = document.getElementById('timezoneDisplay');
+    const tzContainerEl = document.getElementById('timezoneContainer');
+    const tzAtSubmit = tzSelectEl ? tzSelectEl.value : '';
+    try { localStorage.removeItem('selectedTimezone'); } catch(e){}
+    try { if (tzSelectEl && tzSelectEl._tzIntervalId) { clearInterval(tzSelectEl._tzIntervalId); delete tzSelectEl._tzIntervalId; } } catch(e){}
+    try { if (window._tzIntervalId) { clearInterval(window._tzIntervalId); delete window._tzIntervalId; } } catch(e){}
+    if (tzContainerEl) tzContainerEl.style.display = 'none';
+    if (tzDisplayEl) tzDisplayEl.textContent = '';
+
     const name = document.getElementById('employeeName').value;
     const date = document.getElementById('attendanceDate').value;
     let status = document.getElementById('attendanceStatus').value;
@@ -1269,8 +1285,9 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
     const employees = JSON.parse(storage.getItem('employees') || '[]');
     const employee = employees.find(e => e.name === name && e.department === currentDepartment);
 
-    // Read selected timezone (if any) — we'll store it with the record instead of converting on submit
-    const tz = document.getElementById('timezoneSelect') ? document.getElementById('timezoneSelect').value : '';
+    // Use the TZ captured at submit time (so we don't lose it when we cleared the UI)
+    const tz = typeof tzAtSubmit !== 'undefined' ? tzAtSubmit : (document.getElementById('timezoneSelect') ? document.getElementById('timezoneSelect').value : '');
+    const hadTZ = !!tz; // remember whether user had selected a timezone at submit time
     
     if (employee) {
         const daySched = getScheduleForDate(employee, date);
@@ -1501,14 +1518,21 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
     await syncDashboardToSheets();
     await syncWeeklyReportToSheets();
 
-    // After successful submit, clear any selected timezone so next input defaults
+    // After successful submit, clear any stored timezone and update the UI.
     try { localStorage.removeItem('selectedTimezone'); } catch (e) { /* ignore */ }
     const tzSelect = document.getElementById('timezoneSelect');
     const tzDisplay = document.getElementById('timezoneDisplay');
+    const tzContainer = document.getElementById('timezoneContainer');
     if (tzSelect) {
+        // Clear the select value for next use
         tzSelect.value = '';
-        // Trigger change to reset display text back to Philippines default
-        tzSelect.dispatchEvent(new Event('change'));
+        // Clear any running tz interval to stop live updates (both select-bound and global)
+        try { if (tzSelect._tzIntervalId) { clearInterval(tzSelect._tzIntervalId); delete tzSelect._tzIntervalId; } } catch(e) {}
+        try { if (window._tzIntervalId) { clearInterval(window._tzIntervalId); delete window._tzIntervalId; } } catch(e) {}
+
+        // Always hide the timezone panel after submit and remove the live text
+        if (tzContainer) tzContainer.style.display = 'none';
+        if (tzDisplay) tzDisplay.textContent = '';
     } else if (tzDisplay) {
         tzDisplay.textContent = 'Using Philippines (Asia/Manila)';
     }
