@@ -210,25 +210,25 @@ body.coms-active {
 @media (min-width: 1100px) and (min-height: 760px) {
     /* Make the form noticeably wider and keep it centered */
     #mainRow:not(.admin-open) > #formCol {
-        width: 560px !important;
-        flex: 0 0 560px !important;
-        max-width: 560px !important;
+        width: 500px !important;
+        flex: 0 0 500px !important;
+        max-width: 500px !important;
     }
 
     /* When admin is open, use slightly narrower column so admin panel can fit */
     #mainRow.admin-open #formCol {
-        width: 520px !important;
-        flex: 0 0 520px !important;
-        max-width: 520px !important;
+        width: 460px !important;
+        flex: 0 0 460px !important;
+        max-width: 460px !important;
     }
 }
 
 /* Form col — fluid width, fits all resolutions */
 #formCol {
-    /* Toned-down width for better balance at 75% zoom */
-    width: clamp(340px, 28vw, 520px) !important;
-    flex: 0 0 clamp(340px, 28vw, 520px) !important;
-    max-width: clamp(340px, 28vw, 520px) !important;
+    /* Adjusted width to be slimmer at 75% zoom */
+    width: clamp(320px, 24vw, 440px) !important;
+    flex: 0 0 clamp(320px, 24vw, 440px) !important;
+    max-width: clamp(320px, 24vw, 440px) !important;
     margin-left: 0 !important;
     max-height: calc(100vh - 100px);
     overflow-y: auto;
