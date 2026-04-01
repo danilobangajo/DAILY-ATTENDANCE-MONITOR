@@ -75,7 +75,20 @@
                             
                             <div class="mb-3">
                                 <label for="attendanceDate" class="form-label">Date</label>
-                                <input type="date" class="form-control" id="attendanceDate" required aria-label="Attendance Date">
+                                <div class="d-flex align-items-center">
+                                    <input type="date" class="form-control" id="attendanceDate" required aria-label="Attendance Date">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary ms-2 p-2" id="timezoneBtn" title="Select timezone (icon only)">
+                                        <i class="bi bi-globe2"></i>
+                                    </button>
+                                </div>
+                                <div id="timezoneContainer" class="mt-2" style="display:none;">
+                                    <div class="d-flex align-items-center gap-2">
+                                        <select id="timezoneSelect" class="form-select form-select-sm" style="max-width:320px;">
+                                            <!-- options populated by script -->
+                                        </select>
+                                        <div id="timezoneDisplay" class="text-muted small">International time will show here</div>
+                                    </div>
+                                </div>
                             </div>
                             
                             <div class="mb-3">

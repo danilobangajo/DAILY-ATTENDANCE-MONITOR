@@ -193,6 +193,19 @@ body.coms-active {
     min-height: 0;
 }
 
+/* When admin panel is hidden (no .admin-open), center the form column horizontally
+   This keeps admin panel layout unchanged when opened (uses #mainRow.admin-open). */
+#mainRow:not(.admin-open) > #formCol {
+    margin-left: auto !important;
+    margin-right: auto !important;
+}
+
+/* Center the form column both horizontally and vertically when admin panel is hidden */
+#mainRow:not(.admin-open) {
+    align-items: center; /* vertical centering */
+    justify-content: center; /* horizontal centering fallback */
+}
+
 /* Form col — fluid width, fits all resolutions */
 #formCol {
     /* Slightly wider default form column for readability */

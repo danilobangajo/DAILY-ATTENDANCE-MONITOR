@@ -1,4 +1,3 @@
-
 // Storage wrapper to handle tracking prevention
 const storage = (() => {
     const mem = {};
@@ -669,6 +668,148 @@ function updateDateTime() {
     }
 }
 
+// Timezone helper: populate select and handle display
+const TZ_LIST = [
+    'Asia/Manila', 'UTC', 'America/New_York', 'Europe/London', 'Asia/Tokyo', 'Australia/Sydney'
+];
+
+function initTimezoneControls() {
+    const btn = document.getElementById('timezoneBtn');
+    const container = document.getElementById('timezoneContainer');
+    const select = document.getElementById('timezoneSelect');
+    const display = document.getElementById('timezoneDisplay');
+
+    // Populate options
+    select.innerHTML = '';
+    const emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = 'Use default (Philippine Time)';
+    select.appendChild(emptyOpt);
+    TZ_LIST.forEach(tz => {
+        const opt = document.createElement('option');
+        opt.value = tz;
+        opt.textContent = tz;
+        select.appendChild(opt);
+    });
+
+    btn.addEventListener('click', () => {
+        container.style.display = container.style.display === 'none' ? 'block' : 'none';
+    });
+
+    let tzInterval = null;
+    select.addEventListener('change', () => {
+        const tz = select.value;
+        if (!tz) {
+            display.textContent = 'Using Philippines (Asia/Manila)';
+            if (tzInterval) { clearInterval(tzInterval); tzInterval = null; }
+            // Persist selection
+            try { localStorage.removeItem('selectedTimezone'); } catch(e){}
+            return;
+        }
+
+        const update = () => {
+            try {
+                const now = new Date();
+                const options = { timeZone: tz, hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' };
+                const parts = new Intl.DateTimeFormat('en-US', options).formatToParts(now);
+                const h = parts.find(p => p.type === 'hour').value;
+                const m = parts.find(p => p.type === 'minute').value;
+                const s = parts.find(p => p.type === 'second').value;
+                // Also show date
+                const dateOptions = { timeZone: tz, year: 'numeric', month: 'short', day: '2-digit' };
+                const dateStr = new Intl.DateTimeFormat('en-US', dateOptions).format(now);
+                display.textContent = `${dateStr} ${h}:${m}:${s} (${tz})`;
+            } catch (e) {
+                display.textContent = `Time unavailable for ${tz}`;
+            }
+        };
+
+        update();
+        if (tzInterval) clearInterval(tzInterval);
+        tzInterval = setInterval(update, 1000);
+
+        // Also set attendance date and time inputs to the selected timezone's current date/time
+        try {
+            const now = new Date();
+            const dateOptions = { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' };
+            const dparts = new Intl.DateTimeFormat('en-CA', dateOptions).format(now).split('-');
+            // en-CA gives YYYY-MM-DD
+            const dateVal = dparts.join('-');
+            const dateInput = document.getElementById('attendanceDate');
+            if (dateInput) dateInput.value = dateVal;
+            // Persist selection
+            try { localStorage.setItem('selectedTimezone', tz); } catch(e){}
+        } catch (e) {
+            // ignore
+        }
+    });
+
+    // Initialize display and restore selection
+    const saved = (function(){ try { return localStorage.getItem('selectedTimezone'); } catch(e) { return null; } })();
+    if (saved) {
+        select.value = saved;
+        select.dispatchEvent(new Event('change'));
+    } else {
+        display.textContent = 'Using Philippines (Asia/Manila)';
+    }
+
+    // When user clicks/focuses Time In or Time Out, fill with current time for selected timezone (if empty)
+    const timeInInput = document.getElementById('timeIn');
+    const timeOutInput = document.getElementById('timeOut');
+    const fillWithTZTime = (inputEl) => {
+        if (!inputEl) return;
+        if (inputEl.value) return; // don't override existing value
+        const selectedTZ = select.value || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        try {
+            const now = new Date();
+            const timeOptions = { timeZone: selectedTZ, hour12: false, hour: '2-digit', minute: '2-digit' };
+            const timeStr = new Intl.DateTimeFormat('en-GB', timeOptions).format(now); // HH:MM
+            inputEl.value = timeStr;
+        } catch (e) { /* ignore */ }
+    };
+
+    if (timeInInput) {
+        timeInInput.addEventListener('focus', () => fillWithTZTime(timeInInput));
+        timeInInput.addEventListener('click', () => fillWithTZTime(timeInInput));
+    }
+    if (timeOutInput) {
+        timeOutInput.addEventListener('focus', () => fillWithTZTime(timeOutInput));
+        timeOutInput.addEventListener('click', () => fillWithTZTime(timeOutInput));
+    }
+}
+
+// Convert a local time (HH:MM or HH:MM:SS) and date (YYYY-MM-DD) to time in target timezone
+function convertToTZ(dateStr, timeStr, targetTZ) {
+    if (!targetTZ) return { date: dateStr, time: timeStr };
+    // Build a Date from the parts in UTC by interpreting the given date+time as if in targetTZ
+    // Approach: get the equivalent instant for the targetTZ by using Date.toLocaleString with timeZone
+    try {
+        const [y, mo, d] = dateStr.split('-').map(Number);
+        const timeParts = (timeStr || '00:00:00').split(':').map(Number);
+        const hour = timeParts[0] || 0;
+        const minute = timeParts[1] || 0;
+        const second = timeParts[2] || 0;
+
+        // Create an ISO-like string in targetTZ by building UTC components from formatted parts
+        // Get the milliseconds value for the same local wall-clock in targetTZ by searching for an instant
+        // We'll create a Date in UTC from the targetTZ wall time by using Date.UTC and then adjusting by the timezone offset
+        // Simpler method: use Intl to get the offset between targetTZ and UTC at the desired instant
+        const asUTCString = new Date(Date.UTC(y, mo - 1, d, hour, minute, second));
+        // Find the equivalent wall time in targetTZ for that UTC instant
+        const parts = new Intl.DateTimeFormat('en-US', { timeZone: targetTZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).formatToParts(asUTCString);
+        const ty = parts.find(p => p.type === 'year').value;
+        const tmo = parts.find(p => p.type === 'month').value;
+        const td = parts.find(p => p.type === 'day').value;
+        const th = parts.find(p => p.type === 'hour').value;
+        const tm = parts.find(p => p.type === 'minute').value;
+        const ts = parts.find(p => p.type === 'second').value;
+
+        return { date: `${ty}-${tmo}-${td}`, time: `${th}:${tm}:${ts}` };
+    } catch (e) {
+        return { date: dateStr, time: timeStr };
+    }
+}
+
 // Set default date to today
 function setDefaultDate() {
     const dateInput = document.getElementById('attendanceDate');
@@ -676,6 +817,14 @@ function setDefaultDate() {
     const today = getLocalISODate();
     dateInput.value = today;
 }
+
+// Run initializers on DOM ready
+document.addEventListener('DOMContentLoaded', () => {
+    setDefaultDate();
+    updateDateTime();
+    initTimezoneControls();
+    setInterval(updateDateTime, 1000);
+});
 
 // Get status badge class
 function getStatusBadgeClass(status) {
@@ -1086,7 +1235,7 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
     const date = document.getElementById('attendanceDate').value;
     let status = document.getElementById('attendanceStatus').value;
     let timeIn = document.getElementById('timeIn').value;
-    const timeOut = document.getElementById('timeOut').value;
+    let timeOut = document.getElementById('timeOut').value;
     const reason = document.getElementById('attendanceReason').value;
     const existingRecordId = document.getElementById('employeeName').getAttribute('data-existing-record-id');
     let lateMinutes = 0;
@@ -1113,6 +1262,9 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
     // Get employee data
     const employees = JSON.parse(storage.getItem('employees') || '[]');
     const employee = employees.find(e => e.name === name && e.department === currentDepartment);
+
+    // Read selected timezone (if any) — we'll store it with the record instead of converting on submit
+    const tz = document.getElementById('timezoneSelect') ? document.getElementById('timezoneSelect').value : '';
     
     if (employee) {
         const daySched = getScheduleForDate(employee, date);
@@ -1287,6 +1439,7 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
             scheduleTime: scheduleTime,
             lateMinutes: lateMinutes,
             reason: reason,
+            tz: tz || '',
             department: currentDepartment
         };
         attendanceData.push(newRecord);
@@ -2517,6 +2670,7 @@ function submitEarlyOut() {
         record.earlyOut = true;
     } else {
         // No open record — create provisional early-out record
+        const tzEarly = document.getElementById('timezoneSelect') ? document.getElementById('timezoneSelect').value : '';
         const newRecord = {
             id: Date.now(),
             name: name,
@@ -2528,6 +2682,7 @@ function submitEarlyOut() {
             scheduleTime: '',
             lateMinutes: 0,
             reason: reasonText,
+            tz: tzEarly || '',
             department: currentDepartment,
             earlyOut: true
         };
