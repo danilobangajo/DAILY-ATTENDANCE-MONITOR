@@ -1500,6 +1500,18 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
     await syncFullState();
     await syncDashboardToSheets();
     await syncWeeklyReportToSheets();
+
+    // After successful submit, clear any selected timezone so next input defaults
+    try { localStorage.removeItem('selectedTimezone'); } catch (e) { /* ignore */ }
+    const tzSelect = document.getElementById('timezoneSelect');
+    const tzDisplay = document.getElementById('timezoneDisplay');
+    if (tzSelect) {
+        tzSelect.value = '';
+        // Trigger change to reset display text back to Philippines default
+        tzSelect.dispatchEvent(new Event('change'));
+    } else if (tzDisplay) {
+        tzDisplay.textContent = 'Using Philippines (Asia/Manila)';
+    }
 });
 
 // Show notification
