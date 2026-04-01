@@ -1,3 +1,4 @@
+
 // Storage wrapper to handle tracking prevention
 const storage = (() => {
     const mem = {};

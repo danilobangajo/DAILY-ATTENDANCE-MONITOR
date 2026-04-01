@@ -171,11 +171,35 @@ function getOrCreateBlock(sheet, year, month, isRV) {
   // Calculate where to append
   let appendRow = 2; // first block starts at row 2 (row 1 = sentinel)
   if (blocks.length > 0) {
-    const last       = blocks[blocks.length - 1];
-    const lastNameCol = isRV ? 12 : 10;
-    const empCount   = getEmpRowsInBlock(sheet, last.startRow, lastNameCol).length;
-    // Use a 3-row trailing gap between month blocks to avoid overlap
-    appendRow = last.startRow + 3 + empCount + 3; // 3 header rows + employees + 3-row gap
+    // Instead of appending at the bottom, insert the new month block at the top
+    // so the newest block is immediately visible without scrolling.
+    // Determine how many rows to insert based on saved employee count for this dept.
+    try {
+      const dept = isRV ? 'rv' : 'coms';
+      const props = PropertiesService.getScriptProperties();
+      const stateJson = props.getProperty('appdata_' + dept);
+      let empCount = 0;
+      if (stateJson) {
+        const state = JSON.parse(stateJson);
+        if (state.employees && state.employees.length) {
+          empCount = state.employees.filter(e => (e.department || dept) === dept).length;
+        }
+      }
+      // 3 header rows + employees + 3-row gap
+      const needed = 3 + empCount + 3;
+      if (needed > 0) {
+        sheet.insertRows(2, needed);
+        Logger.log('Inserted ' + needed + ' rows at top for new month block');
+      }
+      appendRow = 2;
+    } catch (e) {
+      Logger.log('Error inserting top block rows: ' + e);
+      // fallback to append behavior if insertion fails
+      const last       = blocks[blocks.length - 1];
+      const lastNameCol = isRV ? 12 : 10;
+      const empCount   = getEmpRowsInBlock(sheet, last.startRow, lastNameCol).length;
+      appendRow = last.startRow + 3 + empCount + 3; // 3 header rows + employees + 3-row gap
+    }
   }
 
   // Write marker in col A (hidden)
@@ -189,6 +213,11 @@ function getOrCreateBlock(sheet, year, month, isRV) {
   } catch (e) {
     Logger.log('seedEmployeesIntoBlock error: ' + e);
   }
+
+  // Reapply headers after seeding employees to guard against any inadvertent
+  // format/merge clears that may have occurred during seeding. Harmless
+  // if headers are already correct.
+  try { writeBlockHeaders(sheet, appendRow, year, month, isRV); } catch (e) { Logger.log('re-writeBlockHeaders error: ' + e); }
 
   return { key, startRow: appendRow, year, monthNum: month };
 }
@@ -380,11 +409,20 @@ function updateDashboard(sheet, employees, targetYear, targetMonth) {
 
   employees.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
-  // Clear only the dashboard stat columns in this block's data rows
-  const lastRow = sheet.getLastRow();
-  if (lastRow >= dataStart) {
-    sheet.getRange(dataStart, 2, lastRow - dataStart + 1, dashCount)
-      .clearContent().clearFormat();
+  // Clear only the dashboard stat columns inside THIS block's data rows
+  // (previous behavior cleared from this block to sheet end which wiped
+  // later month blocks when updating the current month)
+  const blocks = findMonthBlocks(sheet);
+  let nextStart = sheet.getLastRow() + 1;
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i].startRow === block.startRow) {
+      if (i + 1 < blocks.length) nextStart = blocks[i + 1].startRow;
+      break;
+    }
+  }
+  const clearCount = Math.max(0, nextStart - dataStart);
+  if (clearCount > 0) {
+    sheet.getRange(dataStart, 2, clearCount, dashCount).clearContent().clearFormat();
   }
 
   employees.forEach((emp, i) => {
@@ -485,11 +523,10 @@ function buildDashStats(employees, attendanceData, dept, targetYear, targetMonth
     else if (r.status === 'Absent')    s.absent++;
     else if (r.status === 'Late')      { s.late++; s.totalLates += r.lateMinutes || 15; }
     else if (r.status === 'Undertime') s.undertime++;
-    else if (r.status === 'Overtime')  s.overtime++;
-      else if (r.status === 'Overtime') {
-        if (dept === 'coms') s.present++;
-        else s.overtime++;
-      }
+    else if (r.status === 'Overtime')  {
+      // For COMS department, treat Overtime as a counted "present" day on the dashboard
+      if (dept === 'coms') s.present++; else s.overtime++;
+    }
     else if (r.status === 'AWOL')      s.awol++;
     else if (r.status === 'Sick Leave') s.sickLeave++;
     else if (r.status === 'Work From Home') s.wfh++;
@@ -751,6 +788,18 @@ function ensureBlockTrailingGap(sheet, blockStartRow, isRV) {
     const toInsert = requiredGap - currentGap;
     sheet.insertRows(nextStart, toInsert);
     Logger.log('Inserted ' + toInsert + ' gap rows at ' + nextStart + ' for block starting ' + blockStartRow);
+    // Reapply block headers after inserting rows — inserting can split merged
+    // header cells or clear formatting. Find the block metadata and rewrite
+    // headers to ensure STATUS / TIME IN / TIME OUT and company header remain.
+    try {
+      const blocks = findMonthBlocks(sheet);
+      const block = blocks.find(b => b.startRow === blockStartRow);
+      if (block) {
+        writeBlockHeaders(sheet, blockStartRow, block.year, block.monthNum, isRV);
+      }
+    } catch (e) {
+      Logger.log('reapply headers after gap insert error: ' + e);
+    }
   }
 }
 
@@ -801,9 +850,9 @@ function getStatusInfo(status) {
     'Absent':             { bg: '#FCA5A5', text: '#7f1d1d', code: 'A'    },
     'Late':               { bg: '#FED7AA', text: '#7c2d12', code: 'L'    },
     'Undertime':          { bg: '#E9D5FF', text: '#581c87', code: 'UT'   },
-      'Overtime':           { bg: '#E9D5FF', text: '#581c87', code: 'OT'   },
+    'Overtime':         { bg: '#E9D5FF', text: '#581c87', code: 'OT'   },
     'AWOL':               { bg: '#FCA5A5', text: '#7f1d1d', code: 'AWOL' },
-    'Sick Leave':         { bg: '#BFDBFE', text: '#1e3a8a', code: 'SL'   },
+    'Sick Leave':         { bg: '#BFDBFE', text: '#1e3a8a', code: 'LEAVE'   },
     'No Schedule':        { bg: '#BFDBFE', text: '#1e3a8a', code: 'NS'   },
     'Late and Undertime': { bg: '#FED7AA', text: '#7c2d12', code: 'L&UT' },
     'Work From Home':     { bg: '#D1FAE5', text: '#065f46', code: 'WFH'  }
