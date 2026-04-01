@@ -84,14 +84,53 @@ body.coms-active {
     background: linear-gradient(135deg, #f87171 0%, #ef4444 50%, #dc2626 100%);
 }
 
+/* Department background images (page background behind the UI) */
+.rv-bg, body.rv-bg {
+    /* Use the RV image as the page background (image first so it's visible)
+       Keep it fixed and cover the viewport. A subtle overlay is added
+       using the ::after pseudo-element so the UI remains readable. */
+    background-image: url('RV.png');
+    background-size: cover;
+    background-position: center center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+}
+.rv-bg::after, body.rv-bg::after {
+    /* Remove extra color overlay so the PNG shows without tinting header UI */
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: transparent;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.coms-bg, body.coms-bg {
+    background-image: url('COMS.png');
+    background-size: cover;
+    background-position: center center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+}
+.coms-bg::after, body.coms-bg::after {
+    /* Remove extra color overlay so the PNG shows without tinting header UI */
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: transparent;
+    pointer-events: none;
+    z-index: 0;
+}
+
 /* Navbar */
 .navbar {
     padding: 0.4rem 0;
-    background: rgba(255, 255, 255, 0.88) !important;
-    -webkit-backdrop-filter: blur(20px);
-    backdrop-filter: blur(20px);
+    /* Make navbar fully opaque so background images don't tint the header/buttons */
+    background: #ffffff !important;
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
     border: none;
-    border-bottom: 1px solid rgba(255,255,255,0.5);
+    border-bottom: 1px solid rgba(0,0,0,0.06);
     box-shadow: 0 2px 24px rgba(0,0,0,0.10);
     position: fixed;
     top: 0;

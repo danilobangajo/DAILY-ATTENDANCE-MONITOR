@@ -587,6 +587,9 @@ function switchDepartment(dept) {
         document.getElementById('companyName').textContent = 'Red Victory Consumers Goods Trading';
         body.classList.remove('coms-active');
         body.classList.add('rv-active');
+        // department background image
+        body.classList.remove('coms-bg');
+        body.classList.add('rv-bg');
         dot.classList.remove('text-danger');
         dot.classList.add('text-success');
     } else {
@@ -599,6 +602,9 @@ function switchDepartment(dept) {
         document.getElementById('companyName').textContent = 'C. Operations Management Services';
         body.classList.remove('rv-active');
         body.classList.add('coms-active');
+        // department background image
+        body.classList.remove('rv-bg');
+        body.classList.add('coms-bg');
         dot.classList.remove('text-success');
         dot.classList.add('text-danger');
     }
