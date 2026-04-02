@@ -847,7 +847,8 @@ function getStatusBadgeClass(status) {
         'Overtime': 'status-overtime',
         'AWOL': 'status-awol',
         'Sick Leave': 'status-sick',
-        'Work From Home': 'status-wfh'
+        'Work From Home': 'status-wfh',
+        'No Schedule': 'status-ns'
     };
     return statusMap[status] || 'status-present';
 }
@@ -1067,6 +1068,7 @@ function updateDashboard() {
             <th class="text-center">AWOL</th>
             <th class="text-center">Leave</th>
             <th class="text-center">WFH</th>
+            <th class="text-center">NS</th>
             <th class="text-center">Sched Time</th>
             <th class="text-center">Notes</th>
             <th class="text-center">Actions</th>
@@ -1081,6 +1083,7 @@ function updateDashboard() {
             <th class="text-center">AWOL</th>
             <th class="text-center">Leave</th>
             <th class="text-center">WFH</th>
+            <th class="text-center">NS</th>
             <th class="text-center">Sched Time</th>
             <th class="text-center">Notes</th>
             <th class="text-center">Actions</th>
@@ -1106,6 +1109,7 @@ function updateDashboard() {
                 awol: 0,
                 sickLeave: 0,
                 wfh: 0,
+                noSchedule: 0,
                 scheduleDisplay: emp.scheduleDisplay,
                 weeklyDays: emp.weeklyDays
             };
@@ -1158,12 +1162,15 @@ function updateDashboard() {
                 case 'Work From Home':
                     stats.wfh++;
                     break;
+                case 'No Schedule':
+                    stats.noSchedule++;
+                    break;
             }
         }
     });
     
     if (Object.keys(employeeStats).length === 0) {
-        const colspan = currentDepartment === 'rv' ? '12' : '10';
+        const colspan = currentDepartment === 'rv' ? '14' : '12';
         tableBody.innerHTML = `
             <tr>
                 <td colspan="${colspan}" class="text-center text-muted py-4">
@@ -1205,6 +1212,7 @@ function updateDashboard() {
                 <td class="text-center text-awol ${awolColorClass}">${stats.awol}</td>
                 <td class="text-center text-sick">${stats.sickLeave}</td>
                 <td class="text-center text-wfh">${stats.wfh}</td>
+                <td class="text-center text-muted">${stats.noSchedule}</td>
                 <td class="text-center">${schedDisplay}</td>
                 <td class="text-center">${employee && employee.scheduleNotes ? `<span class="badge bg-secondary">${employee.scheduleNotes}</span>` : '-'}</td>
                 <td class="text-center">
@@ -1225,6 +1233,7 @@ function updateDashboard() {
                 <td class="text-center text-awol ${awolColorClass}">${stats.awol}</td>
                 <td class="text-center text-sick">${stats.sickLeave}</td>
                 <td class="text-center text-wfh">${stats.wfh}</td>
+                <td class="text-center text-muted">${stats.noSchedule}</td>
                 <td class="text-center">${schedDisplay}</td>
                 <td class="text-center">${employee && employee.scheduleNotes ? `<span class="badge bg-secondary">${employee.scheduleNotes}</span>` : '-'}</td>
                 <td class="text-center">
@@ -2125,7 +2134,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     const timeInField = document.getElementById('timeIn');
     const timeOutField = document.getElementById('timeOut');
     statusSelect.addEventListener('change', function() {
-        const isAbsent = this.value === 'Absent';
+        const isAbsent = this.value === 'Absent' || this.value === 'Sick Leave';
         if (isAbsent) {
             timeInField.value = '';
             timeInField.disabled = true;
@@ -2243,7 +2252,7 @@ function showCurrentMonthSummary() {
             empMap[r.name] = { name: r.name, scheduleDisplay: emp ? emp.scheduleDisplay : 'Not Set', totalHours: 0, dates: new Set() };
         }
         empMap[r.name].totalHours += parseFloat(r.totalHours || 0);
-        if (r.status !== 'Work From Home') empMap[r.name].dates.add(r.date);
+        if (isCountedStatus(r.status)) empMap[r.name].dates.add(r.date);
     });
 
     modalTableBody.innerHTML = Object.values(empMap)
