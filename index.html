@@ -545,7 +545,11 @@
                         <div class="card-body">
                             <div class="d-flex justify-content-between align-items-center mb-3">
                                 <h5 class="card-title mb-0">Weekly Report</h5>
-                                <div class="d-flex align-items-center gap-3 filter-controls">
+                                <div class="d-flex align-items-center gap-3 filter-controls flex-wrap">
+                                    <div class="filter-item">
+                                        <label class="filter-label">MONTH</label>
+                                        <input type="month" class="form-control form-control-sm" id="reportMonthSummaryPicker" onchange="updateWeeklyReportMonthSummary()" aria-label="Month for full month summary" title="Full month summary for this month">
+                                    </div>
                                     <div class="filter-item">
                                         <label class="filter-label">DATE</label>
                                         <input type="date" class="form-control form-control-sm" id="reportDatePicker" onchange="updateWeeklyReportByDate()" aria-label="Select date">

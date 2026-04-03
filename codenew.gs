@@ -209,7 +209,7 @@ function getOrCreateBlock(sheet, year, month, isRV) {
   // Seed employee rows into the new block from saved app state (so new months start populated)
   try {
     const dept = isRV ? 'rv' : 'coms';
-    seedEmployeesIntoBlock(sheet, appendRow, isRV, dept);
+    seedEmployeesIntoBlock(sheet, appendRow, isRV, dept, year, month);
   } catch (e) {
     Logger.log('seedEmployeesIntoBlock error: ' + e);
   }
@@ -238,8 +238,17 @@ function ensureSheetReady(sheet) {
   }
 }
 
+// Employee exists on sheet for block Y-M only if added on or before that month (addedYear/addedMonth from web app).
+// Missing addedYear/addedMonth = legacy data → show in every month block.
+function employeeAppearsInSheetBlock(emp, blockYear, blockMonth) {
+  if (typeof emp.addedYear !== 'number' || typeof emp.addedMonth !== 'number') return true;
+  if (blockYear > emp.addedYear) return true;
+  if (blockYear === emp.addedYear && blockMonth >= emp.addedMonth) return true;
+  return false;
+}
+
 // Seed employee rows into a specific month block using saved `appdata_{dept}` state.
-function seedEmployeesIntoBlock(sheet, blockStartRow, isRV, dept) {
+function seedEmployeesIntoBlock(sheet, blockStartRow, isRV, dept, blockYear, blockMonth) {
   if (!sheet || !blockStartRow) return;
   try {
     const props = PropertiesService.getScriptProperties();
@@ -252,7 +261,10 @@ function seedEmployeesIntoBlock(sheet, blockStartRow, isRV, dept) {
     const nameCol = 1 + dashCount;
     const dataStart = blockStartRow + 3;
 
-    const deptEmps = state.employees.filter(e => e.department === dept);
+    const by = (typeof blockYear === 'number') ? blockYear : new Date().getFullYear();
+    const bm = (typeof blockMonth === 'number') ? blockMonth : new Date().getMonth();
+
+    const deptEmps = state.employees.filter(e => e.department === dept && employeeAppearsInSheetBlock(e, by, bm));
     deptEmps.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
     deptEmps.forEach((e, i) => {
@@ -315,7 +327,7 @@ function doPost(e) {
             if (empRows.length === 0) {
               // No employees yet in this block — seed them into THIS month block
               try {
-                seedEmployeesIntoBlock(sheet, block.startRow, isRV, data.department);
+                seedEmployeesIntoBlock(sheet, block.startRow, isRV, data.department, y, mo);
               } catch (e) {
                 Logger.log('seedEmployeesIntoBlock (doPost) error: ' + e);
               }
@@ -326,9 +338,12 @@ function doPost(e) {
       updateWeeklyReport(sheet, data.records);
     }
     if (data.type === 'deleteEmployee' && data.employeeName) {
-      // If year/month provided, delete only from that month block; otherwise delete from all blocks
-      if (typeof data.year !== 'undefined' && typeof data.month !== 'undefined') {
-        deleteEmployeeFromBlock(sheet, data.employeeName, Number(data.year), Number(data.month));
+      // blockYear / blockMonth (0-based month) from web app = only that month block + its daily columns
+      // Avoid data.month from clients that send a string month name — use blockMonth only.
+      if (typeof data.blockYear === 'number' && !isNaN(data.blockYear) &&
+          typeof data.blockMonth === 'number' && !isNaN(data.blockMonth)) {
+        // One month block only: row removal removes dashboard + daily cells for that month
+        deleteEmployeeFromBlock(sheet, data.employeeName, data.blockYear, data.blockMonth);
       } else {
         deleteEmployeeFromAllBlocks(sheet, data.employeeName);
       }
@@ -421,8 +436,10 @@ function updateDashboard(sheet, employees, targetYear, targetMonth) {
     }
   }
   const clearCount = Math.max(0, nextStart - dataStart);
+  const daysInMonth = new Date(y, mo + 1, 0).getDate();
+  const numCols = dashCount + daysInMonth * 3 + 1; // stats + NAME + daily (×3) + TOTAL DAYS
   if (clearCount > 0) {
-    sheet.getRange(dataStart, 2, clearCount, dashCount).clearContent().clearFormat();
+    sheet.getRange(dataStart, 2, clearCount, numCols).clearContent().clearFormat();
   }
 
   employees.forEach((emp, i) => {
@@ -430,6 +447,13 @@ function updateDashboard(sheet, employees, targetYear, targetMonth) {
     writeDashRow(sheet, row, emp, isRV);
     applyDashFormatting(sheet, row, emp, isRV);
   });
+
+  // After adding rows, restore the 3 blank gap rows before the next month block (push next section down)
+  try {
+    ensureBlockTrailingGap(sheet, block.startRow, isRV);
+  } catch (e) {
+    Logger.log('ensureBlockTrailingGap after updateDashboard: ' + e);
+  }
 
   Logger.log('Dashboard updated: ' + employees.length + ' employees, block row ' + block.startRow + ' (' + y + '-' + mo + ')');
 }
@@ -503,7 +527,7 @@ function buildDashStats(employees, attendanceData, dept, targetYear, targetMonth
   const curYear  = (typeof targetYear !== 'undefined') ? Number(targetYear) : now.getFullYear();
 
   const stats = {};
-  employees.filter(e => e.department === dept)
+  employees.filter(e => e.department === dept && employeeAppearsInSheetBlock(e, curYear, curMonth))
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
     .forEach(e => {
       stats[e.name] = {
@@ -904,15 +928,29 @@ function onOpen() {
     if (exists) return;
     // Ensure basic fields
     const nowId = Date.now();
-    const toAdd = Object.assign({ id: nowId, name: emp.name, scheduleStart: emp.scheduleStart || '', scheduleEnd: emp.scheduleEnd || '', scheduleDisplay: emp.scheduleDisplay || '', scheduleNotes: emp.scheduleNotes || '', weeklyDays: emp.weeklyDays || '', specialDays: emp.specialDays || [], department: dept }, emp);
+    const n = new Date();
+    const toAdd = Object.assign({
+      id: nowId,
+      addedYear: n.getFullYear(),
+      addedMonth: n.getMonth(),
+      name: emp.name,
+      scheduleStart: emp.scheduleStart || '',
+      scheduleEnd: emp.scheduleEnd || '',
+      scheduleDisplay: emp.scheduleDisplay || '',
+      scheduleNotes: emp.scheduleNotes || '',
+      weeklyDays: emp.weeklyDays || '',
+      specialDays: emp.specialDays || [],
+      department: dept
+    }, emp);
     state.employees.push(toAdd);
     props.setProperty(key, JSON.stringify(state));
     // Update sheets immediately
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(dept.toUpperCase()) || ss.getSheetByName('RV');
     if (sheet) {
-      // Rebuild dashboard and weekly report from saved state
-      updateDashboard(sheet, buildDashStats(state.employees, state.attendanceData || [], dept));
+      const y = n.getFullYear();
+      const mo = n.getMonth();
+      updateDashboard(sheet, buildDashStats(state.employees, state.attendanceData || [], dept, y, mo), y, mo);
       updateWeeklyReportFull(sheet, state.attendanceData || []);
     }
   }

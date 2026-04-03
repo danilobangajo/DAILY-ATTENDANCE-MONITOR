@@ -105,6 +105,13 @@ function getLocalISODate() {
     return d.toISOString().split('T')[0];
 }
 
+/** YYYY-MM for input type="month" */
+function getLocalMonthInputValue(d = new Date()) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    return `${y}-${m}`;
+}
+
 // Current filter date (use local date)
 let currentFilterDate = getLocalISODate();
 let currentFilterMode = 'day'; // 'day' or 'week'
@@ -531,8 +538,9 @@ function saveEmployee() {
     const weeklyDays = days.join(', ');
     const specialDays = getSpecialDays('specialDaysList');
     
-    // Save to storage
+    // Save to storage (addedYear/addedMonth → Google Sheet only lists this emp from that month forward)
     const employees = JSON.parse(storage.getItem('employees') || '[]');
+    const addedNow = new Date();
     employees.push({
         id: Date.now(),
         name: name,
@@ -542,7 +550,9 @@ function saveEmployee() {
         scheduleNotes: scheduleNotes,
         weeklyDays: weeklyDays,
         specialDays: specialDays,
-        department: currentDepartment
+        department: currentDepartment,
+        addedYear: addedNow.getFullYear(),
+        addedMonth: addedNow.getMonth()
     });
     storage.setItem('employees', JSON.stringify(employees));
     
@@ -1068,7 +1078,6 @@ function updateDashboard() {
             <th class="text-center">AWOL</th>
             <th class="text-center">Leave</th>
             <th class="text-center">WFH</th>
-            <th class="text-center">NS</th>
             <th class="text-center">Sched Time</th>
             <th class="text-center">Notes</th>
             <th class="text-center">Actions</th>
@@ -1083,7 +1092,6 @@ function updateDashboard() {
             <th class="text-center">AWOL</th>
             <th class="text-center">Leave</th>
             <th class="text-center">WFH</th>
-            <th class="text-center">NS</th>
             <th class="text-center">Sched Time</th>
             <th class="text-center">Notes</th>
             <th class="text-center">Actions</th>
@@ -1170,7 +1178,7 @@ function updateDashboard() {
     });
     
     if (Object.keys(employeeStats).length === 0) {
-        const colspan = currentDepartment === 'rv' ? '14' : '12';
+        const colspan = currentDepartment === 'rv' ? '13' : '11';
         tableBody.innerHTML = `
             <tr>
                 <td colspan="${colspan}" class="text-center text-muted py-4">
@@ -1212,7 +1220,6 @@ function updateDashboard() {
                 <td class="text-center text-awol ${awolColorClass}">${stats.awol}</td>
                 <td class="text-center text-sick">${stats.sickLeave}</td>
                 <td class="text-center text-wfh">${stats.wfh}</td>
-                <td class="text-center text-muted">${stats.noSchedule}</td>
                 <td class="text-center">${schedDisplay}</td>
                 <td class="text-center">${employee && employee.scheduleNotes ? `<span class="badge bg-secondary">${employee.scheduleNotes}</span>` : '-'}</td>
                 <td class="text-center">
@@ -1233,7 +1240,6 @@ function updateDashboard() {
                 <td class="text-center text-awol ${awolColorClass}">${stats.awol}</td>
                 <td class="text-center text-sick">${stats.sickLeave}</td>
                 <td class="text-center text-wfh">${stats.wfh}</td>
-                <td class="text-center text-muted">${stats.noSchedule}</td>
                 <td class="text-center">${schedDisplay}</td>
                 <td class="text-center">${employee && employee.scheduleNotes ? `<span class="badge bg-secondary">${employee.scheduleNotes}</span>` : '-'}</td>
                 <td class="text-center">
@@ -1505,17 +1511,16 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
     updateWeeklyReportWithFilter();
     updateDashboard();
     
-    // Update weekly report modal if it's open — always sync to submitted date
+    // Update weekly report modal if open: day view if DATE set, else month summary (selected month)
     const weeklyModal = document.getElementById('weeklyReportModal');
     if (weeklyModal && weeklyModal.classList.contains('show')) {
         const reportDatePicker = document.getElementById('reportDatePicker');
-        const weekNumberInput = document.getElementById('weekNumberInput');
-        // If date picker has a value, refresh by date; otherwise default to today
         if (reportDatePicker && reportDatePicker.value) {
             updateWeeklyReportByDate();
         } else {
-            if (reportDatePicker) reportDatePicker.value = getLocalISODate();
-            updateWeeklyReportByDate();
+            const mp = document.getElementById('reportMonthSummaryPicker');
+            if (mp && !mp.value) mp.value = getLocalMonthInputValue();
+            updateWeeklyReportMonthSummary();
         }
     }
     
@@ -1752,11 +1757,14 @@ async function deleteEmployee() {
         saveAttendanceData(attendanceData);
     }
 
-    // 1. Tell Google Sheets to delete the employee row + all their daily records
+    // 1. Google Sheet: remove this employee row only in the current calendar month block
     if (employeeName && employeeDept) {
+        const delNow = new Date();
         await syncToGoogleSheets('deleteEmployee', {
             employeeName: employeeName,
-            department: employeeDept
+            department: employeeDept,
+            blockYear: delNow.getFullYear(),
+            blockMonth: delNow.getMonth()
         });
     }
 
@@ -1838,11 +1846,12 @@ async function deleteAttendanceRecord(recordId, silent = false) {
             }
         } else {
             const reportDatePicker = document.getElementById('reportDatePicker');
-            
             if (reportDatePicker && reportDatePicker.value) {
                 updateWeeklyReportByDate();
             } else {
-                updateWeeklyReportWithFilter();
+                const mp = document.getElementById('reportMonthSummaryPicker');
+                if (mp && !mp.value) mp.value = getLocalMonthInputValue();
+                updateWeeklyReportMonthSummary();
             }
         }
     }
@@ -2148,12 +2157,14 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Time Out is NEVER enabled from status change — only enabled when existing record found
     });
     
-    // Refresh weekly report when modal opens — show current month by default
+    // Refresh weekly report when modal opens — full month summary, default = this month
     const weeklyReportModal = document.getElementById('weeklyReportModal');
     if (weeklyReportModal) {
         weeklyReportModal.addEventListener('show.bs.modal', function() {
             document.getElementById('reportDatePicker').value = '';
-            showCurrentMonthSummary();
+            const mp = document.getElementById('reportMonthSummaryPicker');
+            if (mp) mp.value = getLocalMonthInputValue();
+            updateWeeklyReportMonthSummary();
         });
     }
 });
@@ -2214,12 +2225,9 @@ function updateWeeklyReportCurrentWeek(weekStart, weekEnd) {
     `).join('');
 }
 
-// Show current month summary (default view when Weekly Report opens)
-function showCurrentMonthSummary() {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const monthName = now.toLocaleDateString('en-US', { month: 'long' });
+// Full month summary for Weekly Report modal (month = 0–11)
+function showMonthSummary(year, month) {
+    const monthName = new Date(year, month, 1).toLocaleDateString('en-US', { month: 'long' });
 
     const dateElement = document.getElementById('selectedDateModal');
     if (dateElement) dateElement.textContent = `${monthName} ${year} — Monthly Summary`;
@@ -2244,7 +2252,6 @@ function showCurrentMonthSummary() {
         return;
     }
 
-    // Group by employee, accumulate total hours and unique days
     const empMap = {};
     filteredData.forEach(r => {
         if (!empMap[r.name]) {
@@ -2265,6 +2272,27 @@ function showCurrentMonthSummary() {
             <td class="text-center fw-bold text-success">${d.dates.size} day${d.dates.size !== 1 ? 's' : ''}</td>
             <td class="text-center"><button class="btn btn-sm btn-outline-info" onclick="viewEmployeeMonthDetails('${d.name}', ${month}, ${year})" title="View Details"><i class="bi bi-eye"></i></button></td>
         </tr>`).join('');
+}
+
+/** Uses #reportMonthSummaryPicker; clears single-day filter. Default month = current. */
+function updateWeeklyReportMonthSummary() {
+    const monthInput = document.getElementById('reportMonthSummaryPicker');
+    const datePicker = document.getElementById('reportDatePicker');
+    if (datePicker) datePicker.value = '';
+
+    let year;
+    let month;
+    if (monthInput && monthInput.value) {
+        const parts = monthInput.value.split('-');
+        year = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10) - 1;
+    } else {
+        const now = new Date();
+        year = now.getFullYear();
+        month = now.getMonth();
+        if (monthInput) monthInput.value = getLocalMonthInputValue(now);
+    }
+    showMonthSummary(year, month);
 }
 
 // View employee full month attendance details
@@ -2468,8 +2496,13 @@ function updateWeeklyReportByDate() {
     const selectedDate = datePicker.value;
 
     if (!selectedDate) {
-        showCurrentMonthSummary();
+        updateWeeklyReportMonthSummary();
         return;
+    }
+
+    const monthInput = document.getElementById('reportMonthSummaryPicker');
+    if (monthInput && selectedDate.length >= 7) {
+        monthInput.value = selectedDate.slice(0, 7);
     }
     
     // Clear week number input when date is selected
