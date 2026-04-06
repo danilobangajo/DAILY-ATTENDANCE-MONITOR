@@ -54,7 +54,7 @@ async function syncDashboardToSheets() {
             switch(record.status) {
                 case 'Present': stats.present++; break;
                 case 'Absent': stats.absent++; break;
-                case 'Late': stats.late++; stats.totalLates += record.lateMinutes || 15; break;
+                case 'Late': stats.late++; stats.totalLates += Number(record.lateMinutes) || 0; break;
                 case 'Undertime': stats.undertime++; break;
                 case 'Overtime': if (currentDepartment === 'rv') stats.overtime++; else stats.present++; break;
                 case 'AWOL': stats.awol++; break;
@@ -922,6 +922,16 @@ function saveAttendanceData(data) {
     storage.setItem('attendanceData', JSON.stringify(data));
 }
 
+// RV late minutes use an 11-minute grace period:
+// e.g. 9:13 vs 9:00 schedule => 2 late minutes.
+function computeLateMinutes(diffMinutes, department) {
+    const diff = Number(diffMinutes) || 0;
+    if (department === 'rv') {
+        return Math.max(0, diff - 11);
+    }
+    return Math.max(0, diff);
+}
+
 // Update daily report table
 function updateDailyReport() {
     const tableBody = document.getElementById('dailyReportTable');
@@ -1153,7 +1163,7 @@ function updateDashboard() {
                     break;
                 case 'Late':
                     stats.late++;
-                    stats.totalLates += record.lateMinutes || 15;
+                    stats.totalLates += Number(record.lateMinutes) || 0;
                     break;
                 case 'Undertime':
                     stats.undertime++;
@@ -1367,9 +1377,10 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
             // e.g. 23:51 vs 00:00 → employee is 9 mins early, not 1431 mins late
             timeMinutes = timeMinutes - 24 * 60; // shift back to make it negative
         }
-        lateMinutes = timeMinutes - schedMinutes;
+        const delayMinutes = timeMinutes - schedMinutes;
+        lateMinutes = computeLateMinutes(delayMinutes, currentDepartment);
         
-        if (lateMinutes >= 11) {
+        if (delayMinutes >= 11) {
             status = 'Late';
         } else {
             lateMinutes = 0;
@@ -1389,7 +1400,7 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
         
         const schedMinutes = schedHours * 60 + schedMins;
         const timeMinutes = timeHours * 60 + timeMins;
-        lateMinutes = Math.max(0, timeMinutes - schedMinutes);
+        lateMinutes = computeLateMinutes(timeMinutes - schedMinutes, currentDepartment);
     }
     
     // Also check for any existing record on the same date (catches early-out re-submit)

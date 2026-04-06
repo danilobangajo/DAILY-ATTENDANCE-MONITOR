@@ -25,6 +25,16 @@ function getDashHeaders(isRV) {
     : ['PRESENT','ABSENT','LATE','UNDERTIME','AWOL','SICK LEAVE / VACATION LEAVE','WORK FROM HOME','SCHEDULE TIME','NAME'];
 }
 
+// RV late minutes use an 11-minute grace period.
+// Stored lateMinutes from the app should already be net of grace,
+// but this helper keeps server aggregation safe for missing/legacy data.
+function getLateMinutesForDept(record, dept) {
+  const mins = Number(record && record.lateMinutes);
+  if (!isNaN(mins)) return Math.max(0, mins);
+  // Legacy fallback only when value is missing
+  return dept === 'rv' ? 0 : 15;
+}
+
 function fmtT(t) {
   if (!t) return '';
   const [h, m] = t.split(':');
@@ -545,7 +555,7 @@ function buildDashStats(employees, attendanceData, dept, targetYear, targetMonth
     const s = stats[r.name];
     if (r.status === 'Present')        s.present++;
     else if (r.status === 'Absent')    s.absent++;
-    else if (r.status === 'Late')      { s.late++; s.totalLates += r.lateMinutes || 15; }
+    else if (r.status === 'Late')      { s.late++; s.totalLates += getLateMinutesForDept(r, dept); }
     else if (r.status === 'Undertime') s.undertime++;
     else if (r.status === 'Overtime')  {
       // For COMS department, treat Overtime as a counted "present" day on the dashboard

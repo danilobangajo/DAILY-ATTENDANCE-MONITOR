@@ -1,5 +1,5 @@
 // Configuration - Paste your Google Apps Script Web App URL here
-const GOOGLE_SHEETS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzTznpmZMochimhPrZmGtp8Y4znoMUcGhdioiElecTGTcHPcOrHNHRKYzFBn7d5Y-hE/exec';
+const GOOGLE_SHEETS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxE5i6zKVgE4wj875WX-2p3u9y_eWZi--JEwqKgtNqY8pzn4bJZxqQSpxO6d-ousyB5/exec';
 
 // Sync to Google Sheets
 async function syncToGoogleSheets(type, data) {
