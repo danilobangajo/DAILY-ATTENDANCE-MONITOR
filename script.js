@@ -956,7 +956,29 @@ function initTimezoneControls() {
         display.textContent = 'Using Philippines (Asia/Manila)';
     }
 
-    // Temporary manual mode: do not auto-fill Time In/Time Out from timezone.
+    // When user clicks/focuses Time In or Time Out, fill with current time for selected timezone (if empty)
+    const timeInInput = document.getElementById('timeIn');
+    const timeOutInput = document.getElementById('timeOut');
+    const fillWithTZTime = (inputEl) => {
+        if (!inputEl) return;
+        if (inputEl.value) return; // don't override existing value
+        const selectedTZ = select.value || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        try {
+            const now = new Date();
+            const timeOptions = { timeZone: selectedTZ, hour12: false, hour: '2-digit', minute: '2-digit' };
+            const timeStr = new Intl.DateTimeFormat('en-GB', timeOptions).format(now); // HH:MM
+            inputEl.value = timeStr;
+        } catch (e) { /* ignore */ }
+    };
+
+    if (timeInInput) {
+        timeInInput.addEventListener('focus', () => fillWithTZTime(timeInInput));
+        timeInInput.addEventListener('click', () => fillWithTZTime(timeInInput));
+    }
+    if (timeOutInput) {
+        timeOutInput.addEventListener('focus', () => fillWithTZTime(timeOutInput));
+        timeOutInput.addEventListener('click', () => fillWithTZTime(timeOutInput));
+    }
 }
 
 // Convert a local time (HH:MM or HH:MM:SS) and date (YYYY-MM-DD) to time in target timezone
@@ -2323,15 +2345,27 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
     }
     
-    // Temporary manual mode for Time In field
+    // Auto-capture current time for Time In field
     const timeInInput = document.getElementById('timeIn');
     if (timeInInput) {
-        timeInInput.type = 'time';
-        timeInInput.readOnly = false;
-        timeInInput.disabled = false;
-        timeInInput.style.backgroundColor = '';
-        timeInInput.style.cursor = '';
+        // Make time input readonly and remove picker
+        timeInInput.type = 'text';
+        timeInInput.readOnly = true;
+        timeInInput.style.backgroundColor = '#f8f9fa';
+        timeInInput.style.cursor = 'not-allowed';
         timeInInput.placeholder = '';
+
+        timeInInput.addEventListener('focus', function() {
+            // Only auto-fill if field is empty
+            if (!this.value) {
+                const now = new Date();
+                const hours = now.getHours().toString().padStart(2, '0');
+                const minutes = now.getMinutes().toString().padStart(2, '0');
+                this.value = `${hours}:${minutes}`;
+
+                showNotification('Time automatically captured and locked for security', 'info');
+            }
+        });
     }
     
     // Setup Time Out field — disabled by default until employee has existing Time In record
@@ -2360,9 +2394,9 @@ document.addEventListener('DOMContentLoaded', async function() {
             timeInField.style.cursor = 'not-allowed';
         } else {
             timeInField.disabled = false;
-            timeInField.readOnly = false;
-            timeInField.style.backgroundColor = '';
-            timeInField.style.cursor = '';
+            timeInField.readOnly = true;
+            timeInField.style.backgroundColor = '#f8f9fa';
+            timeInField.style.cursor = 'not-allowed';
         }
         // Time Out is NEVER enabled from status change — only enabled when existing record found
     });
@@ -3211,10 +3245,9 @@ function addEmployeeNameListener() {
             statusSelect.style.backgroundColor = '#e9ecef';
             statusSelect.style.cursor = 'not-allowed';
             timeInInput.value = existingRecord.timeIn;
-            timeInInput.readOnly = false;
-            timeInInput.disabled = false;
-            timeInInput.style.backgroundColor = '';
-            timeInInput.style.cursor = '';
+            timeInInput.readOnly = true;
+            timeInInput.style.backgroundColor = '#f8f9fa';
+            timeInInput.style.cursor = 'not-allowed';
             timeOutInput.disabled = false;
             timeOutInput.style.backgroundColor = '';
             timeOutInput.style.cursor = '';
@@ -3238,10 +3271,9 @@ function addEmployeeNameListener() {
             statusSelect.style.backgroundColor = '#e9ecef';
             statusSelect.style.cursor = 'not-allowed';
             timeInInput.value = earlyOutRecord.timeIn;
-            timeInInput.readOnly = false;
-            timeInInput.disabled = false;
-            timeInInput.style.backgroundColor = '';
-            timeInInput.style.cursor = '';
+            timeInInput.readOnly = true;
+            timeInInput.style.backgroundColor = '#f8f9fa';
+            timeInInput.style.cursor = 'not-allowed';
             timeOutInput.disabled = true;
             timeOutInput.style.backgroundColor = '#e9ecef';
             timeOutInput.style.cursor = 'not-allowed';
