@@ -178,38 +178,50 @@ function getOrCreateBlock(sheet, year, month, isRV) {
   const found  = blocks.find(b => b.key === key);
   if (found) return found;
 
-  // Calculate where to append
+  const dept = isRV ? 'rv' : 'coms';
+  const monthValue = (y, m) => y * 12 + m;
+  const targetVal = monthValue(year, month);
+
+  // Estimate how many rows this new block needs.
+  let empCount = 0;
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const stateJson = props.getProperty('appdata_' + dept);
+    if (stateJson) {
+      const state = JSON.parse(stateJson);
+      if (state.employees && state.employees.length) {
+        empCount = state.employees.filter(e => (e.department || dept) === dept && employeeAppearsInSheetBlock(e, year, month)).length;
+      }
+    }
+  } catch (e) {
+    Logger.log('Error estimating employee count for new block: ' + e);
+  }
+  const needed = 3 + empCount + 3; // 3 header rows + employees + 3-row gap
+
+  // Keep blocks ordered by month DESC in sheet: newest on top (May > Apr > Mar).
   let appendRow = 2; // first block starts at row 2 (row 1 = sentinel)
   if (blocks.length > 0) {
-    // Instead of appending at the bottom, insert the new month block at the top
-    // so the newest block is immediately visible without scrolling.
-    // Determine how many rows to insert based on saved employee count for this dept.
-    try {
-      const dept = isRV ? 'rv' : 'coms';
-      const props = PropertiesService.getScriptProperties();
-      const stateJson = props.getProperty('appdata_' + dept);
-      let empCount = 0;
-      if (stateJson) {
-        const state = JSON.parse(stateJson);
-        if (state.employees && state.employees.length) {
-          empCount = state.employees.filter(e => (e.department || dept) === dept).length;
-        }
+    let insertionRow = null;
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      const bVal = monthValue(b.year, b.monthNum);
+      if (targetVal > bVal) {
+        insertionRow = b.startRow; // insert before first older block
+        break;
       }
-      // 3 header rows + employees + 3-row gap
-      const needed = 3 + empCount + 3;
-      if (needed > 0) {
-        sheet.insertRows(2, needed);
-        Logger.log('Inserted ' + needed + ' rows at top for new month block');
-      }
-      appendRow = 2;
-    } catch (e) {
-      Logger.log('Error inserting top block rows: ' + e);
-      // fallback to append behavior if insertion fails
-      const last       = blocks[blocks.length - 1];
-      const lastNameCol = isRV ? 12 : 10;
-      const empCount   = getEmpRowsInBlock(sheet, last.startRow, lastNameCol).length;
-      appendRow = last.startRow + 3 + empCount + 3; // 3 header rows + employees + 3-row gap
     }
+    if (insertionRow === null) {
+      const last = blocks[blocks.length - 1];
+      const lastNameCol = isRV ? 12 : 10;
+      const lastEmpCount = getEmpRowsInBlock(sheet, last.startRow, lastNameCol).length;
+      insertionRow = last.startRow + 3 + lastEmpCount + 3;
+    }
+    if (needed > 0) {
+      if (insertionRow <= sheet.getMaxRows()) sheet.insertRows(insertionRow, needed);
+      else sheet.insertRowsAfter(sheet.getMaxRows(), needed);
+    }
+    appendRow = insertionRow;
+    Logger.log('Inserted new month block ' + key + ' at row ' + appendRow + ' (needed rows: ' + needed + ')');
   }
 
   // Write marker in col A (hidden)
@@ -228,6 +240,7 @@ function getOrCreateBlock(sheet, year, month, isRV) {
   // format/merge clears that may have occurred during seeding. Harmless
   // if headers are already correct.
   try { writeBlockHeaders(sheet, appendRow, year, month, isRV); } catch (e) { Logger.log('re-writeBlockHeaders error: ' + e); }
+  try { applyCompactLayoutToBlock(sheet, appendRow, isRV, year, month); } catch (e) { Logger.log('applyCompactLayoutToBlock error: ' + e); }
 
   return { key, startRow: appendRow, year, monthNum: month };
 }
@@ -246,6 +259,80 @@ function ensureSheetReady(sheet) {
     sheet.setColumnWidth(1, 2);
     sheet.getRange(1, 1).setFontColor('#ffffff').setBackground('#ffffff');
   }
+}
+
+// Rebuild one department sheet from saved/full state to normalize:
+// - month order (latest at top)
+// - compact/consistent block formatting
+// - existing synced data (no logical data changes)
+function normalizeSheetLayoutFromState(sheet, dept, state) {
+  const isRV = sheet.getName() === 'RV';
+  const attendance = (state && state.attendanceData) ? state.attendanceData : [];
+  const employees = (state && state.employees) ? state.employees : [];
+
+  // Hard reset layout canvas, then recreate blocks from state.
+  sheet.clear();
+  sheet.clearFormats();
+  sheet.setFrozenRows(0);
+  sheet.setFrozenColumns(0);
+  sheet.getRange(1, 1).setValue('V2');
+  sheet.setColumnWidth(1, 2);
+  sheet.getRange(1, 1).setFontColor('#ffffff').setBackground('#ffffff');
+
+  // Determine all months from attendance data and sort DESC (latest first).
+  const months = {};
+  attendance.forEach(r => {
+    if (!r || !r.date || r.department !== dept) return;
+    const d = new Date(r.date + 'T00:00:00');
+    months[d.getFullYear() + '-' + d.getMonth()] = { y: d.getFullYear(), mo: d.getMonth() };
+  });
+  const sortedMonths = Object.values(months).sort((a, b) => (b.y * 12 + b.mo) - (a.y * 12 + a.mo));
+
+  // If no attendance yet, create current month block so sheet still has a usable layout.
+  if (sortedMonths.length === 0) {
+    const now = new Date();
+    sortedMonths.push({ y: now.getFullYear(), mo: now.getMonth() });
+  }
+
+  // Create ordered month blocks first.
+  sortedMonths.forEach(({ y, mo }) => {
+    getOrCreateBlock(sheet, y, mo, isRV);
+  });
+
+  // Write dashboard stats for each month block.
+  sortedMonths.forEach(({ y, mo }) => {
+    const monthStats = buildDashStats(employees, attendance, dept, y, mo);
+    updateDashboard(sheet, monthStats, y, mo);
+  });
+
+  // Write daily cells and compact formatting.
+  updateWeeklyReportFull(sheet, attendance);
+}
+
+// Apply a compact, consistent visual style for one month block.
+// This keeps all blocks aligned with the clean "April" look.
+function applyCompactLayoutToBlock(sheet, blockStartRow, isRV, year, month) {
+  const dashCount = getDashHeaders(isRV).length;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const totalCols = dashCount + daysInMonth * 3 + 1;
+  const blocks = findMonthBlocks(sheet);
+  let nextStart = sheet.getLastRow() + 1;
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i].startRow === blockStartRow) {
+      if (i + 1 < blocks.length) nextStart = blocks[i + 1].startRow;
+      break;
+    }
+  }
+  const rowsInBlock = Math.max(3, nextStart - blockStartRow);
+  sheet.getRange(blockStartRow, 2, rowsInBlock, totalCols)
+    .setVerticalAlignment('middle')
+    .setFontSize(8);
+
+  // Compact row heights to avoid "bloated" older blocks.
+  sheet.setRowHeightsForced(blockStartRow, 1, 20);
+  sheet.setRowHeightsForced(blockStartRow + 1, 2, 18);
+  const dataRows = Math.max(0, nextStart - (blockStartRow + 3));
+  if (dataRows > 0) sheet.setRowHeightsForced(blockStartRow + 3, dataRows, 18);
 }
 
 // Employee exists on sheet for block Y-M only if added on or before that month (addedYear/addedMonth from web app).
@@ -381,32 +468,8 @@ function doPost(e) {
 
       props.setProperty('appdata_' + dept, JSON.stringify(data.state));
       props.setProperty(revKey, String(currentRevision + 1));
-      // Also rewrite the sheet so deleted records are cleared from all cells
-      // Ensure month blocks exist for every month present in attendanceData
-      const attendance = data.state.attendanceData || [];
-      const months = {};
-      (attendance || []).forEach(r => {
-        if (!r || !r.date) return;
-        const d = new Date(r.date + 'T00:00:00');
-        months[d.getFullYear() + '-' + d.getMonth()] = { y: d.getFullYear(), mo: d.getMonth() };
-      });
-      const isRV = sheet.getName() === 'RV';
-      Object.values(months).forEach(({ y, mo }) => {
-        try { getOrCreateBlock(sheet, y, mo, isRV); } catch (e) { Logger.log('getOrCreateBlock error: ' + e); }
-      });
-
-      // For every existing month block, write the dashboard stats into that block
-      if (data.state.employees && data.state.employees.length > 0) {
-        const deptEmps = data.state.employees;
-        findMonthBlocks(sheet).forEach(block => {
-          try {
-            updateDashboard(sheet, buildDashStats(deptEmps, data.state.attendanceData || [], dept, block.year, block.monthNum), block.year, block.monthNum);
-          } catch (e) { Logger.log('updateDashboard (fullState) error: ' + e); }
-        });
-      }
-
-      // Now rewrite weekly report cells for all months using full data
-      updateWeeklyReportFull(sheet, attendance);
+      // Normalize whole sheet layout from current full state (same data, cleaned order/format).
+      normalizeSheetLayoutFromState(sheet, dept, data.state);
     }
 
     // Import manually-edited weekly report cells back into PropertiesService state
@@ -479,6 +542,11 @@ function updateDashboard(sheet, employees, targetYear, targetMonth) {
     ensureBlockTrailingGap(sheet, block.startRow, isRV);
   } catch (e) {
     Logger.log('ensureBlockTrailingGap after updateDashboard: ' + e);
+  }
+  try {
+    applyCompactLayoutToBlock(sheet, block.startRow, isRV, y, mo);
+  } catch (e) {
+    Logger.log('applyCompactLayoutToBlock after updateDashboard: ' + e);
   }
 
   Logger.log('Dashboard updated: ' + employees.length + ' employees, block row ' + block.startRow + ' (' + y + '-' + mo + ')');
@@ -611,6 +679,7 @@ function updateWeeklyReportFull(sheet, records) {
   findMonthBlocks(sheet).forEach(block => {
     const mk  = block.key; // "YYYY-M"
     const [y, mo] = mk.split('-').map(Number);
+    try { writeBlockHeaders(sheet, block.startRow, y, mo, isRV); } catch (e) { Logger.log('writeBlockHeaders (weeklyFull) error: ' + e); }
     const daysInMonth   = new Date(y, mo + 1, 0).getDate();
     const dailyStartCol = 2 + dashCount;
     const monthData     = byMonth[mk] || {};
@@ -658,6 +727,7 @@ function updateWeeklyReportFull(sheet, records) {
     });
 
     Logger.log('WeeklyFull written: ' + mk + ' — ' + getEmpRowsInBlock(sheet, block.startRow, nameCol).length + ' employees');
+    try { applyCompactLayoutToBlock(sheet, block.startRow, isRV, y, mo); } catch (e) { Logger.log('applyCompactLayoutToBlock (weeklyFull) error: ' + e); }
   });
 }
 
@@ -689,6 +759,7 @@ function updateWeeklyReport(sheet, records) {
   Object.keys(byMonth).forEach(mk => {
     const [y, mo]  = mk.split('-').map(Number);
     const block    = getOrCreateBlock(sheet, y, mo, isRV);
+    try { writeBlockHeaders(sheet, block.startRow, y, mo, isRV); } catch (e) { Logger.log('writeBlockHeaders (weekly) error: ' + e); }
     const dataStart = block.startRow + 3;
     const daysInMonth  = new Date(y, mo + 1, 0).getDate();
     const dailyStartCol = 2 + dashCount;
@@ -735,6 +806,7 @@ function updateWeeklyReport(sheet, records) {
     });
 
     Logger.log('Weekly written: ' + mk + ' — ' + empRows.length + ' employees');
+    try { applyCompactLayoutToBlock(sheet, block.startRow, isRV, y, mo); } catch (e) { Logger.log('applyCompactLayoutToBlock (weekly) error: ' + e); }
   });
 }
 

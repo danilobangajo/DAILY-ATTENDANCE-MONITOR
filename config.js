@@ -1,5 +1,5 @@
 // Configuration - Paste your Google Apps Script Web App URL here
-const GOOGLE_SHEETS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxlBXO5XR3_Lm2GbFJJeobPZxxvm6bgiLf4QJVUSK9AhJKCU6B4Xou2e4jpjx1WqLVN/exec';
+const GOOGLE_SHEETS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwqnEHkM943ag95i_ZzWmopgMLgdKcYp2BIUpib8s42xvAcdgqDlJwvrkXBmaw6Kryh/exec';
 
 function getDeptRevision(dept) {
     try {
