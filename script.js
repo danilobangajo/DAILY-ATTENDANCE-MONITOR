@@ -2354,7 +2354,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         timeInInput.style.backgroundColor = '#f8f9fa';
         timeInInput.style.cursor = 'not-allowed';
         timeInInput.placeholder = '';
-        
+
         timeInInput.addEventListener('focus', function() {
             // Only auto-fill if field is empty
             if (!this.value) {
@@ -2362,12 +2362,10 @@ document.addEventListener('DOMContentLoaded', async function() {
                 const hours = now.getHours().toString().padStart(2, '0');
                 const minutes = now.getMinutes().toString().padStart(2, '0');
                 this.value = `${hours}:${minutes}`;
-                
+
                 showNotification('Time automatically captured and locked for security', 'info');
             }
         });
-        
-
     }
     
     // Setup Time Out field — disabled by default until employee has existing Time In record

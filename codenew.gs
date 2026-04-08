@@ -363,8 +363,24 @@ function doPost(e) {
     }
     if (data.type === 'fullState' && data.state) {
       const dept = data.department || 'rv';
-      PropertiesService.getScriptProperties()
-        .setProperty('appdata_' + dept, JSON.stringify(data.state));
+      const props = PropertiesService.getScriptProperties();
+      const revKey = 'apprev_' + dept;
+      const currentRevision = Number(props.getProperty(revKey) || '0');
+      const hasBaseRevision = typeof data.baseRevision !== 'undefined' && data.baseRevision !== null;
+      const baseRevision = Number(data.baseRevision);
+
+      // Reject stale full-state writes (device edited older snapshot).
+      if (hasBaseRevision && !isNaN(baseRevision) && baseRevision !== currentRevision) {
+        return ContentService.createTextOutput(JSON.stringify({
+          status: 'conflict',
+          message: 'Stale state. Reload before syncing again.',
+          department: dept,
+          currentRevision: currentRevision
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+
+      props.setProperty('appdata_' + dept, JSON.stringify(data.state));
+      props.setProperty(revKey, String(currentRevision + 1));
       // Also rewrite the sheet so deleted records are cleared from all cells
       // Ensure month blocks exist for every month present in attendanceData
       const attendance = data.state.attendanceData || [];
@@ -900,14 +916,18 @@ function doGet(e) {
   const props = PropertiesService.getScriptProperties();
   const dept  = e && e.parameter && e.parameter.department ? e.parameter.department : null;
   if (dept) {
+    const state = JSON.parse(props.getProperty('appdata_' + dept) || '{"employees":[],"attendanceData":[]}');
+    state.revision = Number(props.getProperty('apprev_' + dept) || '0');
     return ContentService.createTextOutput(
-      props.getProperty('appdata_' + dept) || '{"employees":[],"attendanceData":[]}'
+      JSON.stringify(state)
     ).setMimeType(ContentService.MimeType.JSON);
   }
-  const rv   = props.getProperty('appdata_rv')   || '{"employees":[],"attendanceData":[]}';
-  const coms = props.getProperty('appdata_coms') || '{"employees":[],"attendanceData":[]}';
+  const rv   = JSON.parse(props.getProperty('appdata_rv')   || '{"employees":[],"attendanceData":[]}');
+  const coms = JSON.parse(props.getProperty('appdata_coms') || '{"employees":[],"attendanceData":[]}');
+  rv.revision = Number(props.getProperty('apprev_rv') || '0');
+  coms.revision = Number(props.getProperty('apprev_coms') || '0');
   return ContentService.createTextOutput(
-    JSON.stringify({ rv: JSON.parse(rv), coms: JSON.parse(coms) })
+    JSON.stringify({ rv, coms })
   ).setMimeType(ContentService.MimeType.JSON);
 }
 
