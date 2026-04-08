@@ -492,13 +492,195 @@ function getSpecialDays(containerId) {
     return result;
 }
 
-function getScheduleForDate(employee, dateStr) {
-    if (!dateStr || !employee) return { start: employee.scheduleStart, end: employee.scheduleEnd };
+function loadScheduleOverrides() {
+    const raw = storage.getItem('scheduleOverrides');
+    return raw ? JSON.parse(raw) : [];
+}
+
+function saveScheduleOverrides(overrides) {
+    storage.setItem('scheduleOverrides', JSON.stringify(overrides || []));
+}
+
+function getScheduleOverrideForDate(employeeName, dateStr, department) {
+    if (!employeeName || !dateStr || !department) return null;
+    const keyName = employeeName.toString().trim().toUpperCase();
+    return loadScheduleOverrides().find(o =>
+        (o.name || '').toString().trim().toUpperCase() === keyName &&
+        o.date === dateStr &&
+        o.department === department
+    ) || null;
+}
+
+function getScheduleForDate(employee, dateStr, includeOverride = true) {
+    if (!dateStr || !employee) return { start: employee.scheduleStart, end: employee.scheduleEnd, display: employee.scheduleDisplay || '' };
+
+    const dept = employee.department || currentDepartment;
+    if (includeOverride) {
+        const o = getScheduleOverrideForDate(employee.name, dateStr, dept);
+        if (o && o.type === 'shift') {
+            return { start: o.start, end: o.end, display: `${formatTime(o.start)} - ${formatTime(o.end)}`, source: 'override-shift' };
+        }
+        if (o && o.type === 'broken' && Array.isArray(o.segments) && o.segments.length > 0) {
+            const s1 = o.segments[0];
+            const s2 = o.segments[1] || o.segments[0];
+            return {
+                start: s1.start,
+                end: s2.end,
+                segments: o.segments,
+                isBroken: true,
+                display: `${formatTime(s1.start)} - ${formatTime(s1.end)} / ${formatTime(s2.start)} - ${formatTime(s2.end)}`,
+                source: 'override-broken'
+            };
+        }
+    }
+
     const dayName = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
     // dayName is like "Mon", "Tue", etc.
     const special = (employee.specialDays || []).find(s => s.day === dayName);
-    if (special) return { start: special.start, end: special.end };
-    return { start: employee.scheduleStart, end: employee.scheduleEnd };
+    if (special) return { start: special.start, end: special.end, display: `${formatTime(special.start)} - ${formatTime(special.end)}`, source: 'special' };
+    return { start: employee.scheduleStart, end: employee.scheduleEnd, display: employee.scheduleDisplay || `${formatTime(employee.scheduleStart)} - ${formatTime(employee.scheduleEnd)}`, source: 'regular' };
+}
+
+function initScheduleOverrideControls() {
+    const modeShift = document.getElementById('overrideModeShift');
+    const modeBroken = document.getElementById('overrideModeBroken');
+    const shiftFields = document.getElementById('overrideShiftFields');
+    const brokenFields = document.getElementById('overrideBrokenFields');
+    const dateInput = document.getElementById('attendanceDate');
+    const overrideDate = document.getElementById('overrideDate');
+
+    if (!modeShift || !modeBroken || !shiftFields || !brokenFields) return;
+
+    const refreshMode = () => {
+        const broken = modeBroken.checked;
+        shiftFields.style.display = broken ? 'none' : '';
+        brokenFields.style.display = broken ? '' : 'none';
+    };
+    modeShift.addEventListener('change', refreshMode);
+    modeBroken.addEventListener('change', refreshMode);
+    refreshMode();
+
+    if (dateInput && overrideDate && !overrideDate.value) {
+        overrideDate.value = dateInput.value || getLocalISODate();
+    }
+}
+
+function openScheduleOverrideModal() {
+    const name = (document.getElementById('employeeName')?.value || '').trim();
+    const date = document.getElementById('attendanceDate')?.value || getLocalISODate();
+    if (!name) {
+        showNotification('Select employee name first.', 'warning');
+        return;
+    }
+
+    const employees = JSON.parse(storage.getItem('employees') || '[]');
+    const employee = employees.find(e => e.name === name && e.department === currentDepartment);
+    if (!employee) {
+        showNotification('Employee not found in current department.', 'warning');
+        return;
+    }
+
+    const existing = getScheduleOverrideForDate(name, date, currentDepartment);
+    const info = document.getElementById('scheduleOverrideEmployee');
+    const overrideDate = document.getElementById('overrideDate');
+    const shiftMode = document.getElementById('overrideModeShift');
+    const brokenMode = document.getElementById('overrideModeBroken');
+
+    if (info) info.textContent = `${name} — ${date}`;
+    if (overrideDate) overrideDate.value = date;
+
+    if (existing && existing.type === 'broken') {
+        brokenMode.checked = true;
+        const seg1 = existing.segments?.[0] || {};
+        const seg2 = existing.segments?.[1] || {};
+        document.getElementById('overrideB1Start').value = seg1.start || '';
+        document.getElementById('overrideB1End').value = seg1.end || '';
+        document.getElementById('overrideB2Start').value = seg2.start || '';
+        document.getElementById('overrideB2End').value = seg2.end || '';
+        document.getElementById('overrideStart').value = '';
+        document.getElementById('overrideEnd').value = '';
+    } else {
+        shiftMode.checked = true;
+        const base = existing && existing.type === 'shift'
+            ? { start: existing.start, end: existing.end }
+            : getScheduleForDate(employee, date, false);
+        document.getElementById('overrideStart').value = base.start || '';
+        document.getElementById('overrideEnd').value = base.end || '';
+        document.getElementById('overrideB1Start').value = '';
+        document.getElementById('overrideB1End').value = '';
+        document.getElementById('overrideB2Start').value = '';
+        document.getElementById('overrideB2End').value = '';
+    }
+
+    initScheduleOverrideControls();
+    new bootstrap.Modal(document.getElementById('scheduleOverrideModal')).show();
+}
+
+function saveScheduleOverride() {
+    const name = (document.getElementById('employeeName')?.value || '').trim();
+    const date = document.getElementById('overrideDate')?.value;
+    const isBroken = document.getElementById('overrideModeBroken')?.checked;
+    if (!name || !date) {
+        showNotification('Employee and date are required.', 'warning');
+        return;
+    }
+
+    const overrides = loadScheduleOverrides().filter(o =>
+        !((o.name || '').toString().trim().toUpperCase() === name.toUpperCase() && o.date === date && o.department === currentDepartment)
+    );
+
+    if (isBroken) {
+        const b1s = document.getElementById('overrideB1Start').value;
+        const b1e = document.getElementById('overrideB1End').value;
+        const b2s = document.getElementById('overrideB2Start').value;
+        const b2e = document.getElementById('overrideB2End').value;
+        if (!b1s || !b1e || !b2s || !b2e) {
+            showNotification('Complete all broken schedule fields.', 'warning');
+            return;
+        }
+        overrides.push({
+            id: Date.now(),
+            name,
+            department: currentDepartment,
+            date,
+            type: 'broken',
+            segments: [{ start: b1s, end: b1e }, { start: b2s, end: b2e }],
+            createdAt: new Date().toISOString()
+        });
+    } else {
+        const start = document.getElementById('overrideStart').value;
+        const end = document.getElementById('overrideEnd').value;
+        if (!start || !end) {
+            showNotification('Set shift start and end time.', 'warning');
+            return;
+        }
+        overrides.push({
+            id: Date.now(),
+            name,
+            department: currentDepartment,
+            date,
+            type: 'shift',
+            start,
+            end,
+            createdAt: new Date().toISOString()
+        });
+    }
+
+    saveScheduleOverrides(overrides);
+    bootstrap.Modal.getInstance(document.getElementById('scheduleOverrideModal'))?.hide();
+    showNotification('One-day schedule override saved.', 'success');
+}
+
+function clearScheduleOverride() {
+    const name = (document.getElementById('employeeName')?.value || '').trim();
+    const date = document.getElementById('overrideDate')?.value;
+    if (!name || !date) return;
+    const next = loadScheduleOverrides().filter(o =>
+        !((o.name || '').toString().trim().toUpperCase() === name.toUpperCase() && o.date === date && o.department === currentDepartment)
+    );
+    saveScheduleOverrides(next);
+    bootstrap.Modal.getInstance(document.getElementById('scheduleOverrideModal'))?.hide();
+    showNotification('One-day schedule override cleared.', 'info');
 }
 
 // Save new employee
@@ -932,6 +1114,38 @@ function computeLateMinutes(diffMinutes, department) {
     return Math.max(0, diff);
 }
 
+function toMinutesFromTime(t) {
+    if (!t) return 0;
+    const [h, m] = t.split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
+}
+
+function overlapMinutes(aStart, aEnd, bStart, bEnd) {
+    return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
+}
+
+// For broken schedules: count only overlaps with part1 + part2 windows.
+// For normal schedules: regular timeIn-timeOut duration.
+function calculateWorkedHoursBySchedule(timeIn, timeOut, scheduleMeta) {
+    if (!timeIn || !timeOut) return 0;
+    let inM = toMinutesFromTime(timeIn);
+    let outM = toMinutesFromTime(timeOut);
+    if (outM < inM) outM += 24 * 60;
+
+    if (scheduleMeta && scheduleMeta.isBroken && Array.isArray(scheduleMeta.segments) && scheduleMeta.segments.length > 0) {
+        let worked = 0;
+        scheduleMeta.segments.forEach(seg => {
+            let s = toMinutesFromTime(seg.start);
+            let e = toMinutesFromTime(seg.end);
+            if (e < s) e += 24 * 60;
+            worked += overlapMinutes(inM, outM, s, e);
+        });
+        return parseFloat((worked / 60).toFixed(2));
+    }
+
+    return parseFloat(((outM - inM) / 60).toFixed(2));
+}
+
 // Update daily report table
 function updateDailyReport() {
     const tableBody = document.getElementById('dailyReportTable');
@@ -1289,7 +1503,7 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
     let scheduleTime = '';
     let totalHours = 0;
     
-    // Calculate total hours if both time in and time out are provided
+    // Initial total hours (may be adjusted below for broken schedules)
     if (timeIn && timeOut) {
         const [inHours, inMinutes] = timeIn.split(':').map(Number);
         const [outHours, outMinutes] = timeOut.split(':').map(Number);
@@ -1316,9 +1530,7 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
     
     if (employee) {
         const daySched = getScheduleForDate(employee, date);
-        const fmtT = t => { if (!t) return ''; const [h,m] = t.split(':'); const hr = parseInt(h); return `${(hr%12||12)}:${m} ${hr>=12?'PM':'AM'}`; };
-        const special = (employee.specialDays || []).find(s => s.day === new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' }));
-        scheduleTime = special ? `${fmtT(daySched.start)} - ${fmtT(daySched.end)}` : (employee.scheduleDisplay || '');
+        scheduleTime = daySched?.display || employee.scheduleDisplay || '';
     }
 
     let attendanceData = loadAttendanceData();
@@ -1328,19 +1540,23 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
     // logs in late at night (20:00–23:59) on the form date, they are actually arriving
     // early for the NEXT day's shift. Shift the record date forward by 1 day.
     let recordDate = date;
-    if (employee && employee.scheduleStart && status === 'Present' && timeIn && !existingRecordId) {
-        const [schedH] = employee.scheduleStart.split(':').map(Number);
-        const [timeH] = timeIn.split(':').map(Number);
-        // Schedule starts between midnight and 6 AM, and time-in is 8 PM or later
-        if (schedH >= 0 && schedH < 6 && timeH >= 20) {
-            const nextDay = new Date(date + 'T00:00:00');
-            nextDay.setDate(nextDay.getDate() + 1);
-            const y = nextDay.getFullYear();
-            const mo = String(nextDay.getMonth() + 1).padStart(2, '0');
-            const dy = String(nextDay.getDate()).padStart(2, '0');
-            recordDate = `${y}-${mo}-${dy}`;
-            // Also update the form date input so subsequent logic uses the correct date
-            document.getElementById('attendanceDate').value = recordDate;
+    if (employee && status === 'Present' && timeIn && !existingRecordId) {
+        const checkSched = getScheduleForDate(employee, date);
+        const schedStartForCheck = checkSched?.start || employee.scheduleStart;
+        if (schedStartForCheck) {
+            const [schedH] = schedStartForCheck.split(':').map(Number);
+            const [timeH] = timeIn.split(':').map(Number);
+            // Schedule starts between midnight and 6 AM, and time-in is 8 PM or later
+            if (schedH >= 0 && schedH < 6 && timeH >= 20) {
+                const nextDay = new Date(date + 'T00:00:00');
+                nextDay.setDate(nextDay.getDate() + 1);
+                const y = nextDay.getFullYear();
+                const mo = String(nextDay.getMonth() + 1).padStart(2, '0');
+                const dy = String(nextDay.getDate()).padStart(2, '0');
+                recordDate = `${y}-${mo}-${dy}`;
+                // Also update the form date input so subsequent logic uses the correct date
+                document.getElementById('attendanceDate').value = recordDate;
+            }
         }
     }
 
@@ -1353,37 +1569,43 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
     const notes = employee && employee.scheduleNotes ? employee.scheduleNotes.toUpperCase() : '';
     const isFlex = notes.includes('FLEX') || notes.includes('FLOAT');
 
-    // For FLEX or FLOAT schedules, preserve the Time In value provided
-    // (do not override with the current time). This ensures attendance details
-    // reflect the scheduled time when the user time-ins using their flex schedule.
-
     // Block FLOAT employees from submitting attendance
     if (notes.includes('FLOAT') && !existingRecordId) {
         showNotification(`${name} is on FLOAT schedule and is not required to log attendance.`, 'warning');
         return;
     }
 
-    if (status === 'Present' && timeIn && employee && employee.scheduleStart && !existingTodayRecord && !isFlex) {
+    // FLEX policy: never count/select "Late" status for flex shifts.
+    // Keep actual clock-in time but normalize status to Present.
+    if (notes.includes('FLEX') && status === 'Late') {
+        status = 'Present';
+        lateMinutes = 0;
+    }
+
+    if (status === 'Present' && timeIn && employee && !existingTodayRecord && !isFlex) {
         const daySched = getScheduleForDate(employee, recordDate);
-        const [schedHours, schedMins] = daySched.start.split(':').map(Number);
-        const [timeHours, timeMins] = timeIn.split(':').map(Number);
-        
-        let schedMinutes = schedHours * 60 + schedMins;
-        let timeMinutes = timeHours * 60 + timeMins;
-        // For midnight-start schedules (00:00-05:59), a late-night time-in (20:00+)
-        // means the employee arrived early for the next day — treat as negative late (early)
-        if (schedHours < 6 && timeHours >= 20) {
-            // time-in is on the previous calendar day relative to schedule
-            // e.g. 23:51 vs 00:00 → employee is 9 mins early, not 1431 mins late
-            timeMinutes = timeMinutes - 24 * 60; // shift back to make it negative
-        }
-        const delayMinutes = timeMinutes - schedMinutes;
-        lateMinutes = computeLateMinutes(delayMinutes, currentDepartment);
-        
-        if (delayMinutes >= 11) {
-            status = 'Late';
-        } else {
-            lateMinutes = 0;
+        const schedStart = daySched?.start || employee.scheduleStart;
+        if (schedStart) {
+            const [schedHours, schedMins] = schedStart.split(':').map(Number);
+            const [timeHours, timeMins] = timeIn.split(':').map(Number);
+            
+            let schedMinutes = schedHours * 60 + schedMins;
+            let timeMinutes = timeHours * 60 + timeMins;
+            // For midnight-start schedules (00:00-05:59), a late-night time-in (20:00+)
+            // means the employee arrived early for the next day — treat as negative late (early)
+            if (schedHours < 6 && timeHours >= 20) {
+                // time-in is on the previous calendar day relative to schedule
+                // e.g. 23:51 vs 00:00 → employee is 9 mins early, not 1431 mins late
+                timeMinutes = timeMinutes - 24 * 60; // shift back to make it negative
+            }
+            const delayMinutes = timeMinutes - schedMinutes;
+            lateMinutes = computeLateMinutes(delayMinutes, currentDepartment);
+            
+            if (delayMinutes >= 11) {
+                status = 'Late';
+            } else {
+                lateMinutes = 0;
+            }
         }
     }
     
@@ -1393,14 +1615,24 @@ document.getElementById('attendanceForm').addEventListener('submit', async funct
     }
 
     // Calculate late minutes for manually selected Late status
-    if (status === 'Late' && timeIn && lateMinutes === 0 && employee && employee.scheduleStart && !isFlex) {
-        const daySched = getScheduleForDate(employee, date);
-        const [schedHours, schedMins] = daySched.start.split(':').map(Number);
-        const [timeHours, timeMins] = timeIn.split(':').map(Number);
-        
-        const schedMinutes = schedHours * 60 + schedMins;
-        const timeMinutes = timeHours * 60 + timeMins;
-        lateMinutes = computeLateMinutes(timeMinutes - schedMinutes, currentDepartment);
+    if (status === 'Late' && timeIn && lateMinutes === 0 && employee && !isFlex) {
+        const daySched = getScheduleForDate(employee, recordDate);
+        const schedStart = daySched?.start || employee.scheduleStart;
+        if (schedStart) {
+            const [schedHours, schedMins] = schedStart.split(':').map(Number);
+            const [timeHours, timeMins] = timeIn.split(':').map(Number);
+            
+            const schedMinutes = schedHours * 60 + schedMins;
+            const timeMinutes = timeHours * 60 + timeMins;
+            lateMinutes = computeLateMinutes(timeMinutes - schedMinutes, currentDepartment);
+        }
+    }
+
+    // Broken schedule hour logic:
+    // automatically excludes break gap between part 1 and part 2.
+    if (timeIn && timeOut && employee) {
+        const scheduleMeta = getScheduleForDate(employee, recordDate);
+        totalHours = calculateWorkedHoursBySchedule(timeIn, timeOut, scheduleMeta);
     }
     
     // Also check for any existing record on the same date (catches early-out re-submit)
@@ -2071,6 +2303,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     updateDailyReport();
     updateWeeklyReportWithFilter();
     updateDashboard();
+    initScheduleOverrideControls();
     
     // Set initial RV theme
     document.body.classList.add('rv-active');
@@ -3057,14 +3290,9 @@ function addEmployeeNameListener() {
             statusSelect.disabled = false;
             statusSelect.style.backgroundColor = '';
             statusSelect.style.cursor = '';
-                // If employee has FLEX in schedule notes, show schedule start time as display
-                if (selectedEmployee && (selectedEmployee.scheduleNotes || '').toUpperCase().includes('FLEX')) {
-                    timeInInput.value = selectedEmployee.scheduleStart || '';
-                    employeeNameInput.setAttribute('data-flex', '1');
-                } else {
-                    timeInInput.value = '';
-                    employeeNameInput.removeAttribute('data-flex');
-                }
+            // Time In should always reflect actual clock-in time (regular/flex alike).
+            timeInInput.value = '';
+            employeeNameInput.removeAttribute('data-flex');
             timeInInput.readOnly = true;
             timeInInput.style.backgroundColor = '#f8f9fa';
             timeInInput.style.cursor = 'not-allowed';

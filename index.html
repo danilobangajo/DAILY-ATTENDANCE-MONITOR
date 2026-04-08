@@ -69,7 +69,12 @@
                         <form id="attendanceForm">
                             <div class="mb-3">
                                 <label for="employeeName" class="form-label">Employee Name</label>
-                                <input type="text" class="form-control" id="employeeName" placeholder="Enter employee name" list="employeeList" required aria-label="Employee Name">
+                                <div class="d-flex align-items-center gap-2">
+                                    <input type="text" class="form-control" id="employeeName" placeholder="Enter employee name" list="employeeList" required aria-label="Employee Name">
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" id="scheduleOverrideBtn" title="Set one-day shift / broken schedule" onclick="openScheduleOverrideModal()" aria-label="Set one-day schedule">
+                                        <i class="bi bi-calendar2-plus"></i>
+                                    </button>
+                                </div>
                                 <datalist id="employeeList"></datalist>
                             </div>
                             
@@ -577,6 +582,81 @@
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- One-Day Shift/Broken Override Modal (User View) -->
+    <div class="modal fade" id="scheduleOverrideModal" tabindex="-1" aria-labelledby="scheduleOverrideModalLabel">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="scheduleOverrideModalLabel"><i class="bi bi-calendar2-plus me-2"></i>One-Day Schedule</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-2 small text-muted" id="scheduleOverrideEmployee"></div>
+
+                    <div class="mb-3">
+                        <label class="form-label d-block mb-2">Mode</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="overrideMode" id="overrideModeShift" value="shift" checked>
+                            <label class="form-check-label" for="overrideModeShift">Change Shift Schedule</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="overrideMode" id="overrideModeBroken" value="broken">
+                            <label class="form-check-label" for="overrideModeBroken">Broken Schedule</label>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="overrideDate" class="form-label">Date (one day only)</label>
+                        <input type="date" class="form-control" id="overrideDate" aria-label="Override date">
+                    </div>
+
+                    <div id="overrideShiftFields">
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label for="overrideStart" class="form-label">Start</label>
+                                <input type="time" class="form-control" id="overrideStart" aria-label="Shift start">
+                            </div>
+                            <div class="col-6">
+                                <label for="overrideEnd" class="form-label">End</label>
+                                <input type="time" class="form-control" id="overrideEnd" aria-label="Shift end">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="overrideBrokenFields" style="display:none;">
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <label for="overrideB1Start" class="form-label">Part 1 Start</label>
+                                <input type="time" class="form-control" id="overrideB1Start" aria-label="Broken part 1 start">
+                            </div>
+                            <div class="col-6">
+                                <label for="overrideB1End" class="form-label">Part 1 End</label>
+                                <input type="time" class="form-control" id="overrideB1End" aria-label="Broken part 1 end">
+                            </div>
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label for="overrideB2Start" class="form-label">Part 2 Start</label>
+                                <input type="time" class="form-control" id="overrideB2Start" aria-label="Broken part 2 start">
+                            </div>
+                            <div class="col-6">
+                                <label for="overrideB2End" class="form-label">Part 2 End</label>
+                                <input type="time" class="form-control" id="overrideB2End" aria-label="Broken part 2 end">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="small text-muted mt-3">This override applies to the selected date only. Next day returns to regular/special schedule.</div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-danger btn-sm me-auto" id="clearOverrideBtn" onclick="clearScheduleOverride()">Clear for this date</button>
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary btn-sm" onclick="saveScheduleOverride()">Save</button>
                 </div>
             </div>
         </div>
