@@ -213,11 +213,31 @@
                             <li>Type your name in the <strong>Employee Name</strong> field or select it from the list.</li>
                             <li>Check that the <strong>Date</strong> is correct (auto-filled to today).</li>
                             <li>Select your <strong>Status</strong> (e.g. Present, Late, Absent).</li>
-                            <li>Click the <strong>Time In</strong> field — your current time will be auto-filled and locked.</li>
+                            <li>Click/focus the <strong>Time In</strong> field to auto-capture the current time (locked mode).</li>
                             <li>Click <strong>Submit Attendance</strong> to save your Time In.</li>
                             <li>At the end of your shift, select your name again — the form will switch to <strong>Time Out mode</strong> automatically.</li>
                             <li>Click <strong>Submit Attendance</strong> again to save your Time Out.</li>
                         </ol>
+                    </div>
+
+                    <div class="policy-section">
+                        <h6><i class="bi bi-calendar2-plus-fill text-info me-2"></i>One-Day Shift / Broken Schedule (Optional)</h6>
+                        <ol class="mb-0">
+                            <li>Select your name first, then click the <strong><i class="bi bi-calendar2-plus"></i></strong> button beside <strong>Employee Name</strong>.</li>
+                            <li>Choose <strong>Change Shift Schedule</strong> (single time range) or <strong>Broken Schedule</strong> (Part 1 and Part 2).</li>
+                            <li>Set the <strong>Date</strong> and time values, then click <strong>Save</strong>.</li>
+                            <li>The override applies to that date only; the next day returns to your regular/special schedule.</li>
+                            <li>Use <strong>Clear for this date</strong> if you want to remove the override.</li>
+                        </ol>
+                    </div>
+
+                    <div class="policy-section">
+                        <h6><i class="bi bi-globe2 text-secondary me-2"></i>Timezone and Date Tips</h6>
+                        <ul class="mb-0">
+                            <li>Click the globe button beside <strong>Date</strong> to open timezone options.</li>
+                            <li>When a timezone is selected, the displayed international clock updates live.</li>
+                            <li>Use the selected timezone when logging for offsite or international teams.</li>
+                        </ul>
                     </div>
 
                     <div class="policy-section">
@@ -229,6 +249,24 @@
                             <li>Click <strong>Confirm Emergency Out</strong>.</li>
                             <li>When you return, select your name again and click <strong>Return</strong> to continue your shift.</li>
                         </ol>
+                    </div>
+
+                    <div class="policy-section">
+                        <h6><i class="bi bi-person-check-fill text-success me-2"></i>Schedule Notes Behavior</h6>
+                        <ul class="mb-0">
+                            <li><strong>Flex</strong>: you can submit attendance normally, and Time In uses actual logged time.</li>
+                            <li><strong>Float</strong>: attendance logging is blocked (not required to log attendance).</li>
+                            <li><strong>Special Day Schedule</strong>: if set by admin, it overrides regular schedule for that weekday.</li>
+                        </ul>
+                    </div>
+
+                    <div class="policy-section">
+                        <h6><i class="bi bi-moon-stars-fill text-dark me-2"></i>Night Shift (12:00 AM) Reminder</h6>
+                        <ul class="mb-0">
+                            <li>If your schedule starts at <strong>12:00 AM</strong> (or early morning) and you time in early at night (e.g. 11:30 PM), the system treats it as the <strong>next day shift</strong>.</li>
+                            <li>When logging, select the <strong>schedule date</strong> (the day your shift belongs to), not the previous calendar night.</li>
+                            <li>Example: for a shift starting <strong>12:00 AM on Friday</strong>, use <strong>Friday</strong> as the attendance date even if you time in Thursday night.</li>
+                        </ul>
                     </div>
 
                     <div class="policy-section">
